@@ -258,6 +258,7 @@ button { cursor: pointer; }
   backdrop-filter: blur(34px) saturate(135%);
   animation: welcome-card-in .6s cubic-bezier(.2,.75,.25,1) both;
 }
+.welcome-logo { display: block; width: 104px; height: 88px; object-fit: contain; }
 .welcome-accent {
   color: #c8a5ff;
   text-shadow: 0 0 36px rgba(169,123,255,.28);
@@ -689,6 +690,7 @@ button { cursor: pointer; }
   background: linear-gradient(145deg, rgba(255,255,255,.91), rgba(247,249,245,.85) 55%, rgba(230,237,226,.83));
   box-shadow: 0 30px 90px rgba(48,61,49,.2), inset 0 1px 0 rgba(255,255,255,.95);
 }
+.welcome-logo { width: 92px; height: 78px; }
 .welcome-glass .text-white { color: #29362f; }
 .welcome-glass .text-slate-300 { color: #647168; }
 .welcome-glass .text-white\/45 { color: #78837a; }

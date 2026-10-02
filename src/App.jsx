@@ -23,7 +23,6 @@ const colors = [
 const colorsById = new Map(colors.map((color) => [color.id, color]));
 const paintProductsById = new Map(paintProducts.map((product) => [product.id, product]));
 const workspaceStorageKey = 'kolorlab.workspace.v1';
-const welcomeStorageKey = 'kolorlab.welcome.dismissed.v1';
 const defaultProjectName = 'Общий проект';
 const catalogLabels = {
   'RAL Classic': 'RAL',
@@ -32,14 +31,6 @@ const catalogLabels = {
 
 function getCatalogLabel(catalog) {
   return catalogLabels[catalog] ?? catalog.replace(' 3D-System Plus', '');
-}
-
-function hasDismissedWelcome() {
-  try {
-    return window.localStorage.getItem(welcomeStorageKey) === 'true';
-  } catch {
-    return false;
-  }
 }
 
 const surfaces = [
@@ -356,7 +347,7 @@ function ProductPhotographyMockup() {
 
 function App() {
   const [initialWorkspace] = useState(readWorkspace);
-  const [welcomeOpen, setWelcomeOpen] = useState(() => !hasDismissedWelcome());
+  const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [selectedId, setSelectedId] = useState(initialWorkspace.selectedId);
   const [catalog, setCatalog] = useState(null);
   const [baseFilter, setBaseFilter] = useState('Все базы');
@@ -419,11 +410,6 @@ function App() {
   };
   const dismissWelcome = () => {
     setWelcomeOpen(false);
-    try {
-      window.localStorage.setItem(welcomeStorageKey, 'true');
-    } catch {
-      setToast('Приветствие будет показано при следующем посещении');
-    }
   };
   const handleCatalogScroll = (event) => {
     const panel = event.currentTarget;
@@ -1342,10 +1328,9 @@ function App() {
           <div className="welcome-orb welcome-orb-one" aria-hidden="true" />
           <div className="welcome-orb welcome-orb-two" aria-hidden="true" />
           <div className="relative z-[1]">
-            <div className="mb-8 flex items-center gap-3">
-              <span className="brand-mark flex h-11 w-11 items-center justify-center rounded-2xl font-['Manrope'] text-xl font-extrabold">K</span>
-              <span className="font-['Manrope'] text-lg font-extrabold tracking-tight">kolor<span className="lime">lab</span><span className="mt-0.5 block text-[9px] font-semibold tracking-[.18em] text-white/45">ЛАБОРАТОРИЯ ЦВЕТА</span></span>
-            </div>
+          <div className="mb-7 flex items-center">
+            <img className="welcome-logo" src={kolorlabLogo} alt="KolorLab — лаборатория цвета" />
+          </div>
             <div className="eyebrow mb-3">ЦИФРОВАЯ ЛАБОРАТОРИЯ ЦВЕТА И КОЛЕРОВКИ</div>
             <h1 className="max-w-2xl font-['Manrope'] text-3xl font-extrabold leading-[1.08] tracking-[-.045em] text-white sm:text-5xl">От идеи до точного <span className="welcome-accent">оттенка</span></h1>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base sm:leading-7">KolorLab помогает подобрать цвет, увидеть его на поверхности и подготовить расчёт краски и спецификацию для покупки.</p>
