@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
-import { getTintingBase } from './data/colorBase.js';
+import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
 import { filterColors, getColorFamily, getColorRecommendations, rgbToLab, deltaEFromLab } from './data/colorTools.js';
 import paintProducts from './data/paintProducts.js';
 import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
@@ -17,7 +17,16 @@ import plasterImage from './assets/surfaces/plaster.jpg';
 import kolorlabLogo from './assets/kolorlab-logo.png';
 
 const colors = [
-  ...baseColors.map((color) => ({ ...color, base: getTintingBase(color.hex, color.lrv, color.baseOverride) })),
+  ...baseColors.map((color) => {
+    const lrvEstimated = !Number.isFinite(color.lrv);
+    const lrv = lrvEstimated ? estimateLrvFromHex(color.hex) : color.lrv;
+    return {
+      ...color,
+      lrv,
+      lrvEstimated,
+      base: getTintingBase(color.hex, lrv, color.baseOverride),
+    };
+  }),
   ...farrowBallColors,
 ];
 const colorsById = new Map(colors.map((color) => [color.id, color]));
