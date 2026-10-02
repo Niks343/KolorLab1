@@ -588,7 +588,7 @@ button { cursor: pointer; }
 
 @media (max-width: 640px) {
   .topbar { height: 62px; }
-  .header-logo { width: 54px; height: 46px; }
+  .header-logo { width: 48px; height: 41px; }
   .mobile-tabbar { position: sticky; top: 62px; z-index: 15; background: rgba(9,12,17,.94); backdrop-filter: blur(14px); }
   .swatch-card:hover { transform: none; }
   .product-photo-stage { min-height: 352px; margin-bottom: 18px; border-radius: 15px; }
@@ -648,7 +648,7 @@ button { cursor: pointer; }
   background-color: rgba(251,252,249,.92) !important;
   color: #29362f;
 }
-.header-logo { display: block; width: 78px; height: 66px; object-fit: contain; }
+.header-logo { display: block; width: 70px; height: 60px; object-fit: contain; }
 .eyebrow { color: #68766c; }
 .panel { border-color: #e4e8e1; background: #fff; box-shadow: 0 3px 14px rgba(57,70,57,.035); }
 .subtle-panel { border-color: #e4e8e1; background: #f5f7f3; }
