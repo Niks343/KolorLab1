@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
-  Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
+  Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
   Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
@@ -14,6 +14,7 @@ import paintProducts from './data/paintProducts.js';
 import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
 import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
 import plasterImage from './assets/surfaces/plaster.jpg';
+import kolorlabLogo from './assets/kolorlab-logo.png';
 
 const colors = [
   ...baseColors.map((color) => ({ ...color, base: getTintingBase(color.hex, color.lrv, color.baseOverride) })),
@@ -809,14 +810,12 @@ function App() {
     <div className="app-shell min-h-screen">
       <header className="topbar sticky top-0 z-20 flex items-center justify-between bg-[#090c11]/90 px-4 backdrop-blur-xl sm:px-7">
         <div className="flex items-center gap-3">
-          <div className="brand-mark flex h-9 w-9 items-center justify-center rounded-xl"><span className="font-['Manrope'] text-lg font-extrabold">K</span></div>
-          <div><div className="font-['Manrope'] text-[15px] font-extrabold tracking-tight">kolor<span className="lime">lab</span></div><div className="hidden text-[9px] tracking-[.13em] text-slate-500 sm:block">ЛАБОРАТОРИЯ ЦВЕТА</div></div>
+          <img className="header-logo" src={kolorlabLogo} alt="KolorLab — лаборатория цвета" />
         </div>
         <div className="hidden items-center gap-2 rounded-full border border-[#2b323c] bg-[#11151b] px-3 py-1.5 text-[11px] text-slate-400 md:flex"><span className="h-1.5 w-1.5 rounded-full bg-[var(--primary-400)]" />Цифровой подбор цвета <span className="ml-1 text-slate-600">·</span> Москва</div>
         <div className="flex items-center gap-2">
           <button onClick={() => setCatalogOpen(true)} aria-expanded={catalogOpen} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:hidden"><Paintbrush size={15} /><span className="hidden sm:inline">Каталог цветов</span><span className="sm:hidden">Каталог</span></button>
           <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShoppingBag size={15} /><span className="hidden sm:inline">Мой проект</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
-          <button className="icon-button hidden h-9 w-9 rounded-lg text-slate-400 sm:inline-flex" title="Настройки"><Menu size={17} /></button>
         </div>
       </header>
 
