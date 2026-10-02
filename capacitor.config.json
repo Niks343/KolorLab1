@@ -1,0 +1,8 @@
+{
+  "appId": "ru.kolorlab.app",
+  "appName": "KolorLab",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  }
+}

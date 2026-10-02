@@ -1,0 +1,9 @@
+node_modules/
+dist/
+backups/
+.env
+.env.*
+!.env.example
+.gradle/
+local.properties
+captures/
