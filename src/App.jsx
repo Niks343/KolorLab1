@@ -22,6 +22,7 @@ const colors = [
 const colorsById = new Map(colors.map((color) => [color.id, color]));
 const paintProductsById = new Map(paintProducts.map((product) => [product.id, product]));
 const workspaceStorageKey = 'kolorlab.workspace.v1';
+const welcomeStorageKey = 'kolorlab.welcome.dismissed.v1';
 const defaultProjectName = 'Общий проект';
 const catalogLabels = {
   'RAL Classic': 'RAL',
@@ -30,6 +31,14 @@ const catalogLabels = {
 
 function getCatalogLabel(catalog) {
   return catalogLabels[catalog] ?? catalog.replace(' 3D-System Plus', '');
+}
+
+function hasDismissedWelcome() {
+  try {
+    return window.localStorage.getItem(welcomeStorageKey) === 'true';
+  } catch {
+    return false;
+  }
 }
 
 const surfaces = [
@@ -346,6 +355,7 @@ function ProductPhotographyMockup() {
 
 function App() {
   const [initialWorkspace] = useState(readWorkspace);
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !hasDismissedWelcome());
   const [selectedId, setSelectedId] = useState(initialWorkspace.selectedId);
   const [catalog, setCatalog] = useState(null);
   const [baseFilter, setBaseFilter] = useState('Все базы');
@@ -405,6 +415,14 @@ function App() {
     setCatalogOpen(false);
     setCatalogShowTop(false);
     setActiveMobileTab((tab) => tab === 'Цвет' ? 'Визуализация' : tab);
+  };
+  const dismissWelcome = () => {
+    setWelcomeOpen(false);
+    try {
+      window.localStorage.setItem(welcomeStorageKey, 'true');
+    } catch {
+      setToast('Приветствие будет показано при следующем посещении');
+    }
   };
   const handleCatalogScroll = (event) => {
     const panel = event.currentTarget;
@@ -1308,6 +1326,43 @@ function App() {
         <div className="print-footer">KolorLab · Спецификация для расчёта и согласования заказа</div>
       </section>
       {toast && <div role="status" className="toast-success fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold shadow-2xl"><Check size={15} />{toast}</div>}
+      {welcomeOpen && <div
+        className="welcome-screen fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4 sm:p-8"
+        role="button"
+        tabIndex={0}
+        aria-label="Приветствие KolorLab. Нажмите, чтобы начать."
+        onClick={dismissWelcome}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            dismissWelcome();
+          }
+        }}
+      >
+        <div className="welcome-glass relative w-full max-w-3xl overflow-hidden rounded-[28px] p-6 sm:p-10">
+          <div className="welcome-orb welcome-orb-one" aria-hidden="true" />
+          <div className="welcome-orb welcome-orb-two" aria-hidden="true" />
+          <div className="relative z-[1]">
+            <div className="mb-8 flex items-center gap-3">
+              <span className="brand-mark flex h-11 w-11 items-center justify-center rounded-2xl font-['Manrope'] text-xl font-extrabold">K</span>
+              <span className="font-['Manrope'] text-lg font-extrabold tracking-tight">kolor<span className="lime">lab</span><span className="mt-0.5 block text-[9px] font-semibold tracking-[.18em] text-white/45">ЛАБОРАТОРИЯ ЦВЕТА</span></span>
+            </div>
+            <div className="eyebrow mb-3">ЦИФРОВАЯ ЛАБОРАТОРИЯ ЦВЕТА И КОЛЕРОВКИ</div>
+            <h1 className="max-w-2xl font-['Manrope'] text-3xl font-extrabold leading-[1.08] tracking-[-.045em] text-white sm:text-5xl">От идеи до точного <span className="welcome-accent">оттенка</span></h1>
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base sm:leading-7">KolorLab помогает подобрать цвет, увидеть его на поверхности и подготовить расчёт краски и спецификацию для покупки.</p>
+            <div className="mt-7 grid gap-3 sm:grid-cols-2">
+              <div className="welcome-feature"><Search size={17} /><span><strong>Подбор цвета</strong><small>Каталоги RAL, NCS, Tikkurila и другие</small></span></div>
+              <div className="welcome-feature"><Layers3 size={17} /><span><strong>Визуализация</strong><small>Поверхности и разное освещение</small></span></div>
+              <div className="welcome-feature"><Droplets size={17} /><span><strong>Расчёт краски</strong><small>Объём и удобные варианты фасовки</small></span></div>
+              <div className="welcome-feature"><FileDown size={17} /><span><strong>Проект и спецификация</strong><small>Сохраните оттенки по комнатам и зонам</small></span></div>
+            </div>
+            <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
+              <span className="text-[10px] leading-5 text-white/45">Цвет на экране приблизительный — перед покупкой рекомендуем пробный выкрас.</span>
+              <span className="welcome-hint inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[.07] px-4 py-2.5 text-xs font-semibold text-white/80">Нажмите, чтобы начать <ArrowRight size={14} /></span>
+            </div>
+          </div>
+        </div>
+      </div>}
     </div>
   );
 }

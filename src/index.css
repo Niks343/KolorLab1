@@ -238,6 +238,61 @@ button { cursor: pointer; }
 .drawer { z-index: 1; isolation: isolate; background: rgba(16,20,26,.88); -webkit-backdrop-filter: blur(22px) saturate(135%); backdrop-filter: blur(22px) saturate(135%); box-shadow: -24px 0 80px rgba(0,0,0,.42), inset 1px 0 0 rgba(255,255,255,.08); }
 .catalog-drawer-panel { max-width: min(1100px, 100vw); }
 .catalog-close-label { display: none; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.welcome-screen {
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(86,55,137,.24), transparent 55%),
+    rgba(4,7,12,.72);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+  backdrop-filter: blur(18px) saturate(120%);
+  animation: welcome-fade-in .45s ease-out both;
+  cursor: pointer;
+}
+.welcome-glass {
+  isolation: isolate;
+  border: 1px solid rgba(255,255,255,.16);
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.025) 48%, rgba(114,80,170,.08)),
+    rgba(13,17,25,.72);
+  box-shadow: 0 35px 110px rgba(0,0,0,.56), inset 0 1px 0 rgba(255,255,255,.14);
+  -webkit-backdrop-filter: blur(34px) saturate(135%);
+  backdrop-filter: blur(34px) saturate(135%);
+  animation: welcome-card-in .6s cubic-bezier(.2,.75,.25,1) both;
+}
+.welcome-accent {
+  color: #c8a5ff;
+  text-shadow: 0 0 36px rgba(169,123,255,.28);
+}
+.welcome-feature {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.075);
+  border-radius: 14px;
+  background: rgba(255,255,255,.035);
+  padding: 14px;
+  color: #bfa1fa;
+}
+.welcome-feature strong,
+.welcome-feature small { display: block; }
+.welcome-feature strong { color: rgba(255,255,255,.92); font-size: 12px; font-weight: 700; }
+.welcome-feature small { margin-top: 4px; color: rgba(203,213,225,.64); font-size: 10px; line-height: 1.5; }
+.welcome-orb {
+  position: absolute;
+  z-index: -1;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  filter: blur(65px);
+  opacity: .28;
+  pointer-events: none;
+}
+.welcome-orb-one { top: -180px; right: -60px; background: #8b5cf6; }
+.welcome-orb-two { bottom: -210px; left: 12%; background: #3872b8; opacity: .2; }
+.welcome-hint { animation: welcome-hint-pulse 2.8s ease-in-out infinite; }
+@keyframes welcome-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes welcome-card-in { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes welcome-hint-pulse { 50% { border-color: rgba(255,255,255,.32); background: rgba(255,255,255,.12); } }
 .catalog-drawer-panel .catalog-results { flex: 0 0 auto; overflow: visible; }
 .catalog-drawer-panel > .catalog-controls > div:first-child input { max-width: none; }
 .catalog-drawer-panel > .catalog-results { scrollbar-gutter: stable; }
@@ -575,6 +630,7 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .swatch-card,.swatch-card::before { transition: none; }
   .swatch-card:hover { transform: none; }
+  .welcome-screen,.welcome-glass,.welcome-hint { animation: none; }
   .swatch-card:hover::before { transform: none; }
   .product-tablet { transition: none; }
   .product-tablet:hover { transform: none; }
