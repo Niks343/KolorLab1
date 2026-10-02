@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
   Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Menu, Paintbrush, Plus, Printer,
@@ -1079,7 +1080,7 @@ function App() {
               </div>;
             })}
             </div>
-            {analogMenu && <div
+            {analogMenu && createPortal(<div
               ref={analogMenuRef}
               role="dialog"
               aria-label={`Аналогичные оттенки для ${analogMenu.source.code}`}
@@ -1125,7 +1126,7 @@ function App() {
                 })}
               </div>
               <div className="border-t border-[#29313b] px-3.5 py-2 text-[9px] text-slate-600">Оттенки отсортированы по близости цвета (CIE76)</div>
-            </div>}
+            </div>, document.body)}
             {visibleCount < filteredColors.length && <div ref={loadMoreRef} className="mt-5 flex min-h-12 items-center justify-center">
               <button onClick={() => setVisibleCount((count) => Math.min(count + 24, filteredColors.length))} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">
                 Показать ещё {Math.min(24, filteredColors.length - visibleCount)} · {visibleCount} из {filteredColors.length}
