@@ -796,6 +796,7 @@ function App() {
       <div className="comparison-label absolute left-4 top-4 rounded-md px-2.5 py-1.5 text-[10px] font-semibold tracking-wide text-white/85">
         {isFlat ? `ЦИФРОВОЙ HEX · ${selected.hex}` : visualSurfaces.find((item) => item.id === previewSurface)?.label.toUpperCase()}
       </div>
+      {!isFlat && <div className="surface-color-chip absolute right-4 top-4 flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[10px] font-semibold text-white"><span className="h-2.5 w-2.5 rounded-sm border border-white/50" style={{ backgroundColor: selected.hex }} />ЦВЕТ ПО HEX · {selected.hex}</div>}
       {!isFlat && <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-full bg-black/25 px-3 py-2 text-xs text-white/85 backdrop-blur-md"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: currentTemperature.swatch }} />{temperature}K · {currentTemperature.title}</div>}
       {!isFlat && selected.hexEstimated && <div className="absolute bottom-4 right-4 rounded-full bg-black/45 px-3 py-2 text-[10px] font-semibold text-white/85 backdrop-blur-md">Экранный образец · проверьте выкрас</div>}
     </div>
@@ -956,9 +957,11 @@ function App() {
                   return color
                     ? <article key={color.id} className="group relative min-w-0 overflow-hidden rounded-lg border border-[#303843] bg-[#0c1015]">
                       <button onClick={() => selectColor(color)} className="comparison-swatch relative h-14 w-full overflow-hidden text-left" aria-label={`Показать ${color.code} в визуализаторе`}>
-                        <img src={visualSurfaces.find((item) => item.id === previewSurface)?.image ?? smoothWallImage} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                        <span className={`absolute inset-0 mix-blend-multiply ${previewSurface === 'wall' ? 'opacity-75' : 'opacity-65'}`} style={{ backgroundColor: color.hex }} />
-                        <span className={`temperature-overlay ${currentTemperature.className}`} />
+                      <span className={`surface-photo surface-photo-${previewSurface}`}>
+                        <img src={visualSurfaces.find((item) => item.id === previewSurface)?.image ?? smoothWallImage} alt="" />
+                        <span className={`surface-photo-tint surface-photo-tint-${previewSurface}`} style={{ backgroundColor: color.hex }} />
+                      </span>
+                      <span className={`temperature-overlay ${currentTemperature.className}`} />
                         <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1.5 py-1 text-[9px] font-bold text-white">{color.hex}</span>
                       </button>
                       <button onClick={() => toggleComparison(color)} className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/50 text-white/80 opacity-100 transition hover:bg-black/75 sm:opacity-0 sm:group-hover:opacity-100" aria-label={`Убрать ${color.code} из подбора`}><X size={13} /></button>

@@ -164,13 +164,15 @@ button { cursor: pointer; }
   background-image: linear-gradient(118deg, rgba(255,255,255,.36), transparent 38%, rgba(0,0,0,.16) 100%);
   transition: background-color .35s ease;
 }
-.surface-photo { position: absolute; z-index: 0; inset: 0; overflow: hidden; }
+.surface-photo { position: absolute; z-index: 0; inset: 0; overflow: hidden; isolation: isolate; }
 .surface-photo > img { width: 100%; height: 100%; object-fit: cover; }
+.surface-photo-wall > img { filter: brightness(1.17); }
+.surface-photo-wallpaper > img { filter: brightness(1.28); }
+.surface-photo-plaster > img { filter: brightness(1.21); }
 .surface-photo-tint { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: multiply; transition: background-color .35s ease; }
-.surface-photo-tint-wall { inset: 0 15% 19%; opacity: .72; }
-.surface-photo-wall .surface-photo-tint-wall { clip-path: polygon(0 0,100% 0,100% 100%,0 100%); }
-.surface-photo-tint-wallpaper { opacity: .62; }
-.surface-photo-tint-plaster { opacity: .62; }
+.surface-photo-tint-wall { inset: 0 15.3% 19.2% 16.3%; }
+.comparison-swatch .surface-photo-tint-wall { inset: 0; }
+.surface-color-chip { background: rgba(25,30,27,.64); backdrop-filter: blur(8px); }
 .light-warm { background-image: linear-gradient(110deg, rgba(248,178,81,.16), transparent 64%); }
 .light-neutral { background-image: linear-gradient(110deg, rgba(245,248,243,.04), transparent 65%); }
 .light-cool { background-image: linear-gradient(110deg, rgba(116,180,255,.16), transparent 65%); }
