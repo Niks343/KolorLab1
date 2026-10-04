@@ -29,14 +29,71 @@ const colors = [
   }),
   ...farrowBallColors,
 ];
-const colorsById = new Map(colors.map((color) => [color.id, color]));
-const paintProductsById = new Map(paintProducts.map((product) => [product.id, product]));
 const workspaceStorageKey = 'kolorlab.workspace.v1';
 const defaultProjectName = 'Общий проект';
+const customColorsCatalog = 'Мои цвета';
 const catalogLabels = {
   'RAL Classic': 'RAL',
   'Tikkurila Symphony': 'Tikkurila',
 };
+
+function normalizeCustomColor(entry) {
+  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-color-')
+    || typeof entry.code !== 'string' || !entry.code.trim()
+    || typeof entry.name_ru !== 'string' || !entry.name_ru.trim()
+    || typeof entry.hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(entry.hex)) return null;
+  const hex = entry.hex.toUpperCase();
+  const rgb = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+  const lrv = estimateLrvFromHex(hex);
+  return {
+    id: entry.id,
+    code: entry.code.trim(),
+    name_ru: entry.name_ru.trim(),
+    catalog: customColorsCatalog,
+    hex,
+    rgb,
+    lrv,
+    base: getTintingBase(hex, lrv),
+    applications: ['интерьер', 'фасад'],
+  };
+}
+
+function normalizeCustomPaintProduct(entry) {
+  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-paint-')
+    || typeof entry.brand !== 'string' || !entry.brand.trim()
+    || typeof entry.name !== 'string' || !entry.name.trim()
+    || !entry.coverageBySurface || typeof entry.coverageBySurface !== 'object') return null;
+  const surfaces = Object.keys(entry.coverageBySurface)
+    .filter((surfaceId) => surfacesCatalogIds.has(surfaceId));
+  if (!surfaces.length) return null;
+  const coverageBySurface = Object.fromEntries(surfaces.flatMap((surfaceId) => {
+    const value = entry.coverageBySurface[surfaceId];
+    return Array.isArray(value) && Number.isFinite(value[0]) && value[0] >= 0.1 && value[0] <= 100
+      ? [[surfaceId, [value[0], value[0]]]]
+      : [];
+  }));
+  if (!Object.keys(coverageBySurface).length) return null;
+  const packageSizesLiters = Array.isArray(entry.packageSizesLiters)
+    ? [...new Set(entry.packageSizesLiters.filter((size) => Number.isFinite(size) && size > 0 && size <= 100))].sort((a, b) => a - b)
+    : null;
+  return {
+    id: entry.id,
+    brand: entry.brand.trim(),
+    name: entry.name.trim(),
+    finish: typeof entry.finish === 'string' && entry.finish.trim() ? entry.finish.trim() : 'Не указано',
+    purpose: typeof entry.purpose === 'string' ? entry.purpose.trim() : '',
+    coverageBySurface,
+    coverageDescription: typeof entry.coverageDescription === 'string' ? entry.coverageDescription : 'Расход задан пользователем.',
+    surfaces: Object.keys(coverageBySurface),
+    baseSystem: typeof entry.baseSystem === 'string' && entry.baseSystem.trim() ? entry.baseSystem.trim() : 'Совместимость баз не указана.',
+    packageSizesLiters: packageSizesLiters?.length ? packageSizesLiters : null,
+    tintBases: Array.isArray(entry.tintBases) ? [...new Set(entry.tintBases.filter((base) => base === 'A' || base === 'C'))] : [],
+    source: '',
+    custom: true,
+  };
+}
+
+const surfacesCatalogIds = new Set(['wall', 'plaster', 'bath', 'facade']);
 
 function getCatalogLabel(catalog) {
   return catalogLabels[catalog] ?? catalog.replace(' 3D-System Plus', '');
@@ -61,6 +118,7 @@ const temperatures = [
 const zones = ['Гостиная', 'Фасад', 'Спальня', 'Кухня', 'Санузел', 'Детская'];
 const catalogFilters = [
   { label: 'Все', catalog: null },
+  { label: customColorsCatalog, catalog: customColorsCatalog },
   { label: 'RAL', catalog: 'RAL Classic' },
   { label: 'NCS', catalog: 'NCS' },
   { label: 'Tikkurila', catalog: 'Tikkurila Symphony' },
@@ -87,18 +145,13 @@ const showcaseSwatches = [
   { code: 'No. 229', name: 'Дыхание слона', hex: '#C6BEB5' },
 ];
 
-const colorIndex = colors.map((color) => ({
-  color,
-  lab: rgbToLab(color.rgb),
-  searchText: `${color.code} ${color.name_ru} ${color.name_en ?? ''} ${color.catalog} ${(color.applications ?? []).join(' ')}`.toLowerCase(),
-}));
-
-function getCatalogAlternatives(sourceColor) {
-  const source = colorIndex.find(({ color }) => color.id === sourceColor.id);
+function getCatalogAlternatives(sourceColor, availableColors = colors) {
+  const source = availableColors.find((color) => color.id === sourceColor.id);
   if (!source) return [];
-  const candidates = colorIndex
-    .filter(({ color }) => color.catalog !== sourceColor.catalog)
-    .map(({ color, lab }) => ({ color, distance: deltaEFromLab(source.lab, lab) }))
+  const sourceLab = rgbToLab(source.rgb);
+  const candidates = availableColors
+    .filter((color) => color.catalog !== sourceColor.catalog)
+    .map((color) => ({ color, distance: deltaEFromLab(sourceLab, rgbToLab(color.rgb)) }))
     .sort((a, b) => a.distance - b.distance);
   const seenCatalogs = new Set();
   return candidates.filter(({ color }) => {
@@ -207,6 +260,8 @@ function readWorkspace() {
     if (!stored) return {
       clients: [],
       projects: [],
+      customColors: [],
+      customPaintProducts: [],
       activeClientId: '',
       activePaintProductId: '',
       paintPricesByProduct: {},
@@ -226,6 +281,14 @@ function readWorkspace() {
       throw new Error('Unsupported or invalid saved workspace format');
     }
 
+    const customColors = Array.isArray(parsed.customColors)
+      ? parsed.customColors.map(normalizeCustomColor).filter(Boolean)
+      : [];
+    const availableColorsById = new Map([...colors, ...customColors].map((color) => [color.id, color]));
+    const customPaintProducts = Array.isArray(parsed.customPaintProducts)
+      ? parsed.customPaintProducts.map(normalizeCustomPaintProduct).filter(Boolean)
+      : [];
+    const availablePaintProductsById = new Map([...paintProducts, ...customPaintProducts].map((product) => [product.id, product]));
     const clients = parsed.clients
       .filter((client) => client && typeof client.id === 'string' && typeof client.name === 'string')
       .map((client) => ({
@@ -238,7 +301,7 @@ function readWorkspace() {
       if (!item || typeof item.key !== 'string' || !clientIds.has(item.clientId)) return [];
       const colorId = item.color?.id;
       const color = typeof colorId === 'string'
-        ? colorsById.get(colorId) ?? getArchivedWoodProjectColor(colorId)
+        ? availableColorsById.get(colorId) ?? getArchivedWoodProjectColor(colorId)
         : null;
       if (!color) return [];
       const surfaceId = surfaces.some((surfaceItem) => surfaceItem.id === item.surface) ? item.surface : 'wall';
@@ -253,9 +316,9 @@ function readWorkspace() {
         zone: zones.includes(item.zone) ? item.zone : 'Гостиная',
         liters: Number.isFinite(item.liters) ? item.liters : 0,
         cans: typeof item.cans === 'string' ? item.cans : '',
-        paintProduct: typeof item.paintProduct?.id === 'string' && paintProductsById.has(item.paintProduct.id)
+        paintProduct: typeof item.paintProduct?.id === 'string' && availablePaintProductsById.has(item.paintProduct.id)
           ? {
-            ...paintProductsById.get(item.paintProduct.id),
+            ...availablePaintProductsById.get(item.paintProduct.id),
             pricePerLiter: Number.isFinite(item.paintProduct.pricePerLiter) ? item.paintProduct.pricePerLiter : null,
           }
           : null,
@@ -266,29 +329,29 @@ function readWorkspace() {
     });
     const paintPricesByProduct = Object.fromEntries(
       Object.entries(parsed.paintPricesByProduct ?? {})
-        .filter(([id, price]) => paintProductsById.has(id) && Number.isFinite(price) && price >= 0),
+        .filter(([id, price]) => availablePaintProductsById.has(id) && Number.isFinite(price) && price >= 0),
     );
     const activeClientId = clientIds.has(parsed.activeClientId) ? parsed.activeClientId : '';
-    const activePaintProductId = paintProductsById.has(parsed.activePaintProductId) ? parsed.activePaintProductId : '';
+    const activePaintProductId = availablePaintProductsById.has(parsed.activePaintProductId) ? parsed.activePaintProductId : '';
     const projectNames = [...new Set([
       ...(Array.isArray(parsed.projectNames) ? parsed.projectNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()) : []),
       ...projects.map((project) => project.projectName),
       defaultProjectName,
     ])];
     const activeProjectName = projectNames.includes(parsed.activeProjectName) ? parsed.activeProjectName : projectNames[0];
-    const selectedId = colorsById.has(parsed.selectedColorId) ? parsed.selectedColorId : colors[0].id;
+    const selectedId = availableColorsById.has(parsed.selectedColorId) ? parsed.selectedColorId : colors[0].id;
     const comparisonIds = Array.isArray(parsed.comparisonIds)
-      ? [...new Set(parsed.comparisonIds.filter((id) => colorsById.has(id)))].slice(0, 6)
+      ? [...new Set(parsed.comparisonIds.filter((id) => availableColorsById.has(id)))].slice(0, 6)
       : [];
     const previewSurface = visualSurfaces.some(({ id }) => id === parsed.previewSurface) ? parsed.previewSurface : 'wall';
     const temperature = temperatures.some(({ value }) => value === parsed.temperature) ? parsed.temperature : 4000;
     const area = Number.isFinite(parsed.area) ? Math.max(5, Math.min(150, parsed.area)) : 32;
     const layers = [1, 2, 3].includes(parsed.layers) ? parsed.layers : 2;
     const zone = zones.includes(parsed.zone) ? parsed.zone : 'Гостиная';
-    return { clients, projects, activeClientId, activePaintProductId, paintPricesByProduct, activeProjectName, projectNames, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone, error: false };
+    return { clients, projects, customColors, customPaintProducts, activeClientId, activePaintProductId, paintPricesByProduct, activeProjectName, projectNames, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone, error: false };
   } catch (error) {
     console.error('Не удалось загрузить локальные данные KolorLab.', error);
-    return { clients: [], projects: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, activeProjectName: defaultProjectName, projectNames: [defaultProjectName], selectedId: colors[0].id, comparisonIds: [], previewSurface: 'wall', temperature: 4000, area: 32, layers: 2, zone: 'Гостиная', error: true };
+    return { clients: [], projects: [], customColors: [], customPaintProducts: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, activeProjectName: defaultProjectName, projectNames: [defaultProjectName], selectedId: colors[0].id, comparisonIds: [], previewSurface: 'wall', temperature: 4000, area: 32, layers: 2, zone: 'Гостиная', error: true };
   }
 }
 
@@ -356,6 +419,8 @@ function ProductPhotographyMockup() {
 
 function App() {
   const [initialWorkspace] = useState(readWorkspace);
+  const [customColors, setCustomColors] = useState(initialWorkspace.customColors);
+  const [customPaintProducts, setCustomPaintProducts] = useState(initialWorkspace.customPaintProducts);
   const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [selectedId, setSelectedId] = useState(initialWorkspace.selectedId);
   const [catalog, setCatalog] = useState(null);
@@ -365,12 +430,14 @@ function App() {
   const [lightnessFilter, setLightnessFilter] = useState('Любая светлота');
   const [search, setSearch] = useState('');
   const [surface, setSurface] = useState(() => {
-    const product = paintProductsById.get(initialWorkspace.activePaintProductId);
+    const product = [...paintProducts, ...initialWorkspace.customPaintProducts]
+      .find((item) => item.id === initialWorkspace.activePaintProductId);
     return product && !product.surfaces.includes('wall') ? product.surfaces[0] : 'wall';
   });
   const [previewSurface, setPreviewSurface] = useState(() => {
     if (initialWorkspace.previewSurface) return initialWorkspace.previewSurface;
-    const product = paintProductsById.get(initialWorkspace.activePaintProductId);
+    const product = [...paintProducts, ...initialWorkspace.customPaintProducts]
+      .find((item) => item.id === initialWorkspace.activePaintProductId);
     if (product?.surfaces.includes('wall')) return 'wall';
     if (product?.surfaces.includes('facade')) return 'plaster';
     return product?.surfaces[0] ?? 'wall';
@@ -409,6 +476,9 @@ function App() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [cameraSample, setCameraSample] = useState(null);
+  const [customEntryType, setCustomEntryType] = useState('');
+  const [customColorDraft, setCustomColorDraft] = useState({ code: '', name: '', hex: '#71806A' });
+  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [] });
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
@@ -436,9 +506,13 @@ function App() {
     catalogPanelRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const selected = colors.find((color) => color.id === selectedId) ?? colors[0];
+  const availableColors = useMemo(() => [...colors, ...customColors], [customColors]);
+  const availableColorsById = useMemo(() => new Map(availableColors.map((color) => [color.id, color])), [availableColors]);
+  const availablePaintProducts = useMemo(() => [...paintProducts, ...customPaintProducts], [customPaintProducts]);
+  const availablePaintProductsById = useMemo(() => new Map(availablePaintProducts.map((product) => [product.id, product])), [availablePaintProducts]);
+  const selected = availableColorsById.get(selectedId) ?? colors[0];
   const currentBase = selected.base;
-  const selectedPaintProduct = paintProductsById.get(paintProductId) ?? null;
+  const selectedPaintProduct = availablePaintProductsById.get(paintProductId) ?? null;
   const selectedPaintBaseSystem = selectedPaintProduct?.baseSystemByTintBase?.[currentBase]
     ?? selectedPaintProduct?.baseSystem
     ?? '';
@@ -466,23 +540,23 @@ function App() {
       : 'Фасовку уточнить у продавца'
     : optimizeCans(liters, currentBase);
   const paintPricePerLiter = paintProductId ? paintPricesByProduct[paintProductId] : undefined;
-  const filteredColors = useMemo(() => filterColors(colors, {
+  const filteredColors = useMemo(() => filterColors(availableColors, {
     catalog,
     base: baseFilter,
     application: applicationFilter,
     family: familyFilter,
     lightness: lightnessFilter,
     query: search,
-  }), [catalog, baseFilter, applicationFilter, familyFilter, lightnessFilter, search]);
+  }), [availableColors, catalog, baseFilter, applicationFilter, familyFilter, lightnessFilter, search]);
   const visibleColors = filteredColors.slice(0, visibleCount);
-  const comparedColors = comparisonIds.map((id) => colorsById.get(id)).filter(Boolean);
+  const comparedColors = comparisonIds.map((id) => availableColorsById.get(id)).filter(Boolean);
   const recommendations = useMemo(
-    () => getColorRecommendations(colors, selected, comparisonIds),
-    [selected, comparisonIds],
+    () => getColorRecommendations(availableColors, selected, comparisonIds),
+    [availableColors, selected, comparisonIds],
   );
   const cameraMatches = useMemo(
-    () => cameraSample ? getClosestColorMatches(colors, cameraSample.rgb) : [],
-    [cameraSample],
+    () => cameraSample ? getClosestColorMatches(availableColors, cameraSample.rgb) : [],
+    [availableColors, cameraSample],
   );
   const selectedCameraDistance = cameraSample
     ? deltaEFromLab(rgbToLab(cameraSample.rgb), rgbToLab(selected.rgb))
@@ -516,6 +590,8 @@ function App() {
         version: 2,
         clients: clients.map(({ id, name, phoneLast4 }) => ({ id, name, phoneLast4 })),
         projects: storedProjects,
+        customColors,
+        customPaintProducts,
         projectNames,
         activeProjectName,
         activeClientId,
@@ -534,7 +610,7 @@ function App() {
       console.error('Не удалось сохранить локальные данные KolorLab.', error);
       setPersistenceError(true);
     }
-  }, [clients, projects, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
+  }, [clients, projects, customColors, customPaintProducts, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -606,6 +682,15 @@ function App() {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [cameraOpen]);
+
+  useEffect(() => {
+    if (!customEntryType) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setCustomEntryType('');
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [customEntryType]);
 
   useEffect(() => {
     const hiddenOnMobileTab = activeMobileTab !== 'Визуализация'
@@ -689,6 +774,78 @@ function App() {
     setCatalogOpen(false);
   };
 
+  const addCustomColor = (event) => {
+    event.preventDefault();
+    const color = normalizeCustomColor({
+      id: `custom-color-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+      code: customColorDraft.code,
+      name_ru: customColorDraft.name,
+      hex: customColorDraft.hex,
+    });
+    if (!color) {
+      setToast('Укажите название и код цвета, а также корректный HEX');
+      return;
+    }
+    setCustomColors((items) => [...items, color]);
+    setSelectedId(color.id);
+    setCustomEntryType('');
+    setCustomColorDraft({ code: '', name: '', hex: '#71806A' });
+    setCatalog(customColorsCatalog);
+    setSearch('');
+    setBaseFilter('Все базы');
+    setApplicationFilter('all');
+    setFamilyFilter('Все семейства');
+    setLightnessFilter('Любая светлота');
+    setActiveMobileTab('Цвет');
+    setCatalogOpen(true);
+    setToast(`${color.code} добавлен в ваши цвета`);
+  };
+
+  const addCustomPaintProduct = (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const brand = String(formData.get('brand') ?? '').trim();
+    const name = String(formData.get('name') ?? '').trim();
+    const coverage = Number(formData.get('coverage'));
+    const selectedSurfaces = formData.getAll('surface').filter((id) => surfacesCatalogIds.has(id));
+    const packageInput = String(formData.get('packages') ?? '').trim();
+    const packageSizes = packageInput
+      ? packageInput.split(',').map((item) => Number(item.trim()))
+      : [];
+    if (!brand || !name || !Number.isFinite(coverage) || coverage <= 0 || coverage > 100 || !selectedSurfaces.length) {
+      setToast('Заполните бренд, название, расход и выберите поверхности');
+      return;
+    }
+    if (packageInput && (!packageSizes.length || packageSizes.some((size) => !Number.isFinite(size) || size <= 0 || size > 100))) {
+      setToast('Укажите фасовки числами через запятую, например: 0.9, 2.7, 9');
+      return;
+    }
+    const tintBases = formData.getAll('tintBase').filter((base) => base === 'A' || base === 'C');
+    const product = normalizeCustomPaintProduct({
+      id: `custom-paint-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+      brand,
+      name,
+      finish: String(formData.get('finish') ?? ''),
+      purpose: String(formData.get('purpose') ?? ''),
+      coverageBySurface: Object.fromEntries(selectedSurfaces.map((id) => [id, [coverage, coverage]])),
+      coverageDescription: `${coverage.toLocaleString('ru-RU')} м²/л · значение задано пользователем`,
+      baseSystem: String(formData.get('baseSystem') ?? ''),
+      packageSizesLiters: packageSizes,
+      tintBases,
+    });
+    if (!product) {
+      setToast('Не удалось проверить параметры краски. Проверьте поля и попробуйте снова.');
+      return;
+    }
+    setCustomPaintProducts((items) => [...items, product]);
+    setPaintProductId(product.id);
+    if (!product.surfaces.includes(surface)) setSurface(product.surfaces[0]);
+    const nextPreview = visualSurfaces.find((item) => product.surfaces.includes(item.calculatorSurface));
+    if (nextPreview) setPreviewSurface(nextPreview.id);
+    setCustomEntryType('');
+    setToast(`${product.brand} · ${product.name} добавлена в мои краски`);
+  };
+
   const sampleCameraPixel = (clientX, clientY) => {
     const video = cameraVideoRef.current;
     const canvas = cameraCanvasRef.current;
@@ -754,7 +911,7 @@ function App() {
       : Math.max(12, rect.top - menuHeight - 8);
     setAnalogMenu({
       source: color,
-      alternatives: getCatalogAlternatives(color),
+      alternatives: getCatalogAlternatives(color, availableColors),
       style: { top, left, width: menuWidth },
     });
   };
@@ -1053,11 +1210,14 @@ function App() {
                 </div>
               </div>
               <section className="mb-3 rounded-xl border border-[#2a313a] bg-[#0d1117] p-3" aria-label="Каталог лакокрасочных материалов">
-                <label htmlFor="paint-product" className="mb-2 block text-[10px] font-semibold text-slate-500">КАТАЛОГ ЛАКОКРАСОЧНЫХ МАТЕРИАЛОВ</label>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="paint-product" className="text-[10px] font-semibold text-slate-500">КАТАЛОГ ЛАКОКРАСОЧНЫХ МАТЕРИАЛОВ</label>
+                  <button type="button" onClick={() => setCustomEntryType('paint')} className="flex items-center gap-1 rounded-md border border-[#343d48] px-2 py-1 text-[9px] font-semibold text-slate-300 transition hover:border-[var(--primary-400)] hover:text-[var(--primary-100)]"><Plus size={11} />Добавить свою краску</button>
+                </div>
                 <div className="relative">
                   <select id="paint-product" value={paintProductId} onChange={(event) => {
                     const productId = event.target.value;
-                    const product = paintProductsById.get(productId);
+                    const product = availablePaintProductsById.get(productId);
                     setPaintProductId(productId);
                     if (product) {
                       if (!product.surfaces.includes(surface)) setSurface(product.surfaces[0]);
@@ -1072,8 +1232,8 @@ function App() {
                     }
                   }} className="field w-full appearance-none rounded-lg px-2.5 py-2 pr-8 text-[11px]">
                     <option value="">Не выбрана — общий расчёт расхода</option>
-                    {[...new Set(paintProducts.map((product) => product.brand))].map((brand) => <optgroup key={brand} label={brand}>
-                      {paintProducts.filter((product) => product.brand === brand).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+                    {[...new Set(availablePaintProducts.map((product) => product.brand))].map((brand) => <optgroup key={brand} label={brand}>
+                      {availablePaintProducts.filter((product) => product.brand === brand).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
                     </optgroup>)}
                   </select>
                   <ChevronDown size={13} className="pointer-events-none absolute right-2.5 top-2.5 text-slate-500" />
@@ -1106,7 +1266,8 @@ function App() {
                   {paintCoverage
                     ? <p className="text-[10px] text-slate-500">Расход для этой поверхности: {minimumLiters.toFixed(1).replace('.', ',')}–{liters.toFixed(1).replace('.', ',')} л на {layers} сл.</p>
                     : <p className="text-[10px] leading-relaxed text-amber-200/70">Нет отдельного расхода по выбранной поверхности; объём ниже рассчитан по общему ориентиру. Сверьте технический лист.</p>}
-                  <a href={selectedPaintProduct.source} target="_blank" rel="noreferrer" className="inline-block text-[10px] text-[var(--primary-300)] underline decoration-[var(--primary-300)]/30 underline-offset-2 hover:decoration-[var(--primary-300)]">Данные производителя</a>
+                  {selectedPaintProduct.source && <a href={selectedPaintProduct.source} target="_blank" rel="noreferrer" className="inline-block text-[10px] text-[var(--primary-300)] underline decoration-[var(--primary-300)]/30 underline-offset-2 hover:decoration-[var(--primary-300)]">Данные производителя</a>}
+                  {selectedPaintProduct.custom && <span className="text-[10px] text-slate-500">Пользовательская запись · расход и фасовка заданы вручную</span>}
                 </div>}
               </section>
               <div className="rounded-xl border border-[#303c2c] bg-[#141a14] p-3.5">
@@ -1200,6 +1361,7 @@ function App() {
             </div>
             <div className="flex shrink-0 items-start gap-3">
               <div className="hidden items-center gap-2 text-[10px] text-slate-500 sm:flex"><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-300" />База A</span><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-300" />База C</span></div>
+              <button onClick={() => setCustomEntryType('color')} className="btn-secondary flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold sm:px-3 sm:text-xs"><Plus size={14} /><span>Добавить цвет</span></button>
               <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="catalog-close-button icon-button h-9 shrink-0 rounded-lg px-2 text-slate-400"><span className="catalog-close-label">Закрыть каталог</span><X size={18} className="catalog-close-icon" /></button>
             </div>
           </div>
@@ -1355,6 +1517,86 @@ function App() {
         </div>}
         </div>
       </main>
+
+      {customEntryType && <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/65 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) setCustomEntryType(''); }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="custom-entry-title" className="panel my-auto max-h-[calc(100dvh-24px)] w-full max-w-xl overflow-y-auto p-4 shadow-2xl sm:p-6">
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div>
+              <div className="eyebrow">{customEntryType === 'color' ? 'ПОЛЬЗОВАТЕЛЬСКИЙ ОТТЕНОК' : 'ПОЛЬЗОВАТЕЛЬСКАЯ КРАСКА'}</div>
+              <h2 id="custom-entry-title" className="mt-1 font-['Manrope'] text-lg font-bold">{customEntryType === 'color' ? 'Добавить свой цвет' : 'Добавить свою краску'}</h2>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Запись сохранится в приложении на этом устройстве.</p>
+            </div>
+            <button type="button" onClick={() => setCustomEntryType('')} aria-label="Закрыть форму" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
+          </div>
+          {customEntryType === 'color' ? <form onSubmit={addCustomColor} className="space-y-4">
+            <label className="block text-[10px] font-semibold text-slate-400">Код / ваш артикул
+              <input autoFocus required maxLength={40} value={customColorDraft.code} onChange={(event) => setCustomColorDraft((draft) => ({ ...draft, code: event.target.value }))} placeholder="Например, Дизайн 01" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
+            <label className="block text-[10px] font-semibold text-slate-400">Название оттенка
+              <input required maxLength={80} value={customColorDraft.name} onChange={(event) => setCustomColorDraft((draft) => ({ ...draft, name: event.target.value }))} placeholder="Например, Туманное утро" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
+            <div className="grid grid-cols-[auto_1fr] items-end gap-3">
+              <label className="block text-[10px] font-semibold text-slate-400">Образец<input type="color" value={customColorDraft.hex} onChange={(event) => setCustomColorDraft((draft) => ({ ...draft, hex: event.target.value.toUpperCase() }))} aria-label="Выбрать цвет" className="mt-1.5 block h-10 w-14 cursor-pointer rounded-lg border border-[#343d48] bg-[#0c1015] p-1" /></label>
+              <label className="block text-[10px] font-semibold text-slate-400">HEX-код
+                <input required pattern="#[0-9a-fA-F]{6}" maxLength={7} value={customColorDraft.hex} onChange={(event) => setCustomColorDraft((draft) => ({ ...draft, hex: event.target.value.toUpperCase() }))} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 font-mono text-xs uppercase" />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#2a313a] bg-[#0c1015] px-3 py-2.5">
+              <span className="text-[10px] text-slate-400">База рассчитывается автоматически по HEX</span>
+              <BaseBadge base={getTintingBase(customColorDraft.hex, estimateLrvFromHex(customColorDraft.hex))} />
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
+              <button type="button" onClick={() => setCustomEntryType('')} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+              <button type="submit" className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold"><Plus size={14} />Сохранить цвет</button>
+            </div>
+          </form> : <form onSubmit={addCustomPaintProduct} className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-[10px] font-semibold text-slate-400">Бренд / производитель
+                <input autoFocus name="brand" required maxLength={60} placeholder="Например, Моя мастерская" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              </label>
+              <label className="block text-[10px] font-semibold text-slate-400">Название краски
+                <input name="name" required maxLength={80} placeholder="Название продукта" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-[10px] font-semibold text-slate-400">Расход, м²/л
+                <input name="coverage" type="number" required min="0.1" max="100" step="0.1" defaultValue={customPaintDraft.coverage} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              </label>
+              <label className="block text-[10px] font-semibold text-slate-400">Фасовки, л через запятую
+                <input name="packages" defaultValue={customPaintDraft.packages} placeholder="0.9, 2.7, 9" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              </label>
+            </div>
+            <label className="block text-[10px] font-semibold text-slate-400">Тип / блеск
+              <input name="finish" maxLength={80} placeholder="Например, матовая" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
+            <label className="block text-[10px] font-semibold text-slate-400">Примечание о краске
+              <input name="purpose" maxLength={180} placeholder="Назначение или ваши заметки" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
+            <fieldset>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Подходящие поверхности</legend>
+              <div className="flex flex-wrap gap-2">{surfaces.map((item) => <label key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
+                <input type="checkbox" name="surface" value={item.id} checked={customPaintDraft.surfaces.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, surfaces: event.target.checked ? [...draft.surfaces, item.id] : draft.surfaces.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
+                {item.label}
+              </label>)}</div>
+            </fieldset>
+            <label className="block text-[10px] font-semibold text-slate-400">Система баз / примечание
+              <input name="baseSystem" maxLength={120} placeholder="Например, уточнить коды баз у производителя" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
+            <fieldset>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимые базы колеровки (если известны)</legend>
+              <div className="flex gap-2">{['A', 'C'].map((base) => <label key={base} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
+                <input type="checkbox" name="tintBase" value={base} checked={customPaintDraft.tintBases.includes(base)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, tintBases: event.target.checked ? [...draft.tintBases, base] : draft.tintBases.filter((item) => item !== base) }))} className="accent-[var(--primary-400)]" />
+                База {base}
+              </label>)}</div>
+              <p className="mt-1.5 text-[9px] leading-relaxed text-slate-500">Если не отметить базу, приложение предупредит, что её совместимость не подтверждена.</p>
+            </fieldset>
+            <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
+              <button type="button" onClick={() => setCustomEntryType('')} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+              <button type="submit" className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold"><Plus size={14} />Сохранить краску</button>
+            </div>
+          </form>}
+        </section>
+      </div>}
 
       {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>
         <section role="dialog" aria-modal="true" aria-labelledby="expanded-color-title" className="relative flex min-h-[100dvh] flex-col justify-between p-5 pt-[max(20px,env(safe-area-inset-top))] sm:p-8 sm:pt-[max(32px,env(safe-area-inset-top))]">
