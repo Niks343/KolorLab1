@@ -173,6 +173,16 @@ button { cursor: pointer; }
 .surface-photo-tint-wall { inset: 0 15.3% 19.2% 16.3%; }
 .comparison-swatch .surface-photo-tint-wall { inset: 0; }
 .surface-color-chip { background: rgba(25,30,27,.64); backdrop-filter: blur(8px); }
+.camera-preview video {
+  display: block;
+  width: 100%;
+  height: min(56vh, 380px);
+  min-height: 210px;
+  object-fit: contain;
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+.camera-preview video:focus-visible { outline: 2px solid var(--primary-300); outline-offset: -3px; }
 .light-warm { background-image: linear-gradient(110deg, rgba(248,178,81,.16), transparent 64%); }
 .light-neutral { background-image: linear-gradient(110deg, rgba(245,248,243,.04), transparent 65%); }
 .light-cool { background-image: linear-gradient(110deg, rgba(116,180,255,.16), transparent 65%); }

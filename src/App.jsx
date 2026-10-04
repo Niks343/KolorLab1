@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowDown, ArrowDownUp, ArrowRight, Building2, Check, ChevronDown, Copy, Droplets, FileDown,
+  ArrowDown, ArrowDownUp, ArrowRight, Building2, Camera, Check, ChevronDown, Copy, Droplets, FileDown,
   Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
   Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
@@ -9,7 +9,7 @@ import {
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
-import { filterColors, getColorFamily, getColorRecommendations, rgbToLab, deltaEFromLab } from './data/colorTools.js';
+import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
 import paintProducts from './data/paintProducts.js';
 import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
 import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
@@ -406,6 +406,12 @@ function App() {
   const [comparisonIds, setComparisonIds] = useState(initialWorkspace.comparisonIds);
   const [persistenceError, setPersistenceError] = useState(initialWorkspace.error);
   const [expandedColor, setExpandedColor] = useState(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [cameraSample, setCameraSample] = useState(null);
+  const cameraVideoRef = useRef(null);
+  const cameraCanvasRef = useRef(null);
+  const cameraStreamRef = useRef(null);
   const loadMoreRef = useRef(null);
   const analogMenuRef = useRef(null);
   const catalogPanelRef = useRef(null);
@@ -474,6 +480,13 @@ function App() {
     () => getColorRecommendations(colors, selected, comparisonIds),
     [selected, comparisonIds],
   );
+  const cameraMatches = useMemo(
+    () => cameraSample ? getClosestColorMatches(colors, cameraSample.rgb) : [],
+    [cameraSample],
+  );
+  const selectedCameraDistance = cameraSample
+    ? deltaEFromLab(rgbToLab(cameraSample.rgb), rgbToLab(selected.rgb))
+    : null;
 
   useEffect(() => {
     setVisibleCount(24);
@@ -540,6 +553,65 @@ function App() {
     const timer = window.setTimeout(() => setToast(''), 2800);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!cameraOpen) return undefined;
+    let cancelled = false;
+    let stream = null;
+    const startCamera = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError('Камера недоступна в этом браузере. Откройте сайт по HTTPS и проверьте поддержку камеры.');
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: 'environment' } },
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        cameraStreamRef.current = stream;
+        if (!cameraVideoRef.current) throw new Error('Не удалось подготовить окно камеры.');
+        cameraVideoRef.current.srcObject = stream;
+        await cameraVideoRef.current.play();
+      } catch (error) {
+        stream?.getTracks().forEach((track) => track.stop());
+        cameraStreamRef.current = null;
+        if (cancelled) return;
+        if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+          setCameraError('Нет доступа к камере. Разрешите использование камеры в настройках браузера и попробуйте снова.');
+        } else if (error.name === 'NotFoundError' || error.name === 'OverconstrainedError') {
+          setCameraError('Камера не найдена или недоступна на этом устройстве.');
+        } else {
+          setCameraError('Не удалось запустить камеру. Проверьте, что она не используется другим приложением, и попробуйте снова.');
+        }
+      }
+    };
+    startCamera();
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    };
+  }, [cameraOpen]);
+
+  useEffect(() => {
+    if (!cameraOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setCameraOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [cameraOpen]);
+
+  useEffect(() => {
+    const hiddenOnMobileTab = activeMobileTab !== 'Визуализация'
+      && window.matchMedia('(max-width: 1279px)').matches;
+    if (cameraOpen && (hiddenOnMobileTab || catalogOpen || drawerOpen)) setCameraOpen(false);
+  }, [activeMobileTab, cameraOpen, catalogOpen, drawerOpen]);
 
   useEffect(() => {
     if (!clientCardId) return undefined;
@@ -615,6 +687,60 @@ function App() {
     setSelectedId(color.id);
     setActiveMobileTab('Визуализация');
     setCatalogOpen(false);
+  };
+
+  const sampleCameraPixel = (clientX, clientY) => {
+    const video = cameraVideoRef.current;
+    const canvas = cameraCanvasRef.current;
+    if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      setCameraError('Камера ещё загружается. Подождите немного и повторите выбор.');
+      return;
+    }
+    const { videoWidth, videoHeight } = video;
+    const bounds = video.getBoundingClientRect();
+    const scale = Math.min(bounds.width / videoWidth, bounds.height / videoHeight);
+    const renderedWidth = videoWidth * scale;
+    const renderedHeight = videoHeight * scale;
+    const offsetX = (bounds.width - renderedWidth) / 2;
+    const offsetY = (bounds.height - renderedHeight) / 2;
+    const localX = clientX - bounds.left - offsetX;
+    const localY = clientY - bounds.top - offsetY;
+    if (localX < 0 || localY < 0 || localX > renderedWidth || localY > renderedHeight) return;
+
+    canvas.width = videoWidth;
+    canvas.height = videoHeight;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) {
+      setCameraError('Не удалось обработать изображение с камеры. Попробуйте обновить страницу.');
+      return;
+    }
+    context.drawImage(video, 0, 0, videoWidth, videoHeight);
+    const centerX = Math.round(localX / scale);
+    const centerY = Math.round(localY / scale);
+    const startX = Math.max(0, Math.min(videoWidth - 5, centerX - 2));
+    const startY = Math.max(0, Math.min(videoHeight - 5, centerY - 2));
+    const pixels = context.getImageData(startX, startY, Math.min(5, videoWidth), Math.min(5, videoHeight)).data;
+    const rgb = [0, 0, 0];
+    const pixelCount = pixels.length / 4;
+    for (let index = 0; index < pixels.length; index += 4) {
+      rgb[0] += pixels[index];
+      rgb[1] += pixels[index + 1];
+      rgb[2] += pixels[index + 2];
+    }
+    const averageRgb = rgb.map((channel) => Math.round(channel / pixelCount));
+    const hex = `#${averageRgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+    setCameraSample({ rgb: averageRgb, hex });
+    setCameraError('');
+  };
+
+  const handleCameraSample = (event) => {
+    sampleCameraPixel(event.clientX, event.clientY);
+  };
+
+  const sampleCameraCenter = () => {
+    const bounds = cameraVideoRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    sampleCameraPixel(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
   };
 
   const showAnalogMenu = (color, anchor) => {
@@ -831,9 +957,80 @@ function App() {
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#252b33] px-4 py-4 sm:px-5">
                 <div><div className="eyebrow">ВИЗУАЛИЗАТОР</div><div className="mt-1 text-sm font-semibold">Посмотрите, как заиграет цвет</div></div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (cameraOpen) setCameraOpen(false);
+                      else {
+                        setCameraError('');
+                        setCameraOpen(true);
+                      }
+                    }}
+                    aria-pressed={cameraOpen}
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${cameraOpen ? 'chip active' : 'btn-secondary'}`}
+                  >
+                    <Camera size={14} />{cameraOpen ? 'Закрыть камеру' : 'Камера'}
+                  </button>
                   <button onClick={() => setComparison(!comparison)} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ${comparison ? 'chip active' : 'btn-secondary'}`}><ArrowDownUp size={14} />Сравнение</button>
                 </div>
               </div>
+              {cameraOpen && <section className="camera-panel border-b border-[#252b33] p-4 sm:p-5" aria-label="Сравнение цвета через камеру">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-100">Сравнение через камеру</h2>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-400">Нажмите на участок поверхности в кадре, чтобы снять его цвет.</p>
+                  </div>
+                  <span className="rounded-full border border-[#343d48] px-2.5 py-1 text-[9px] text-slate-400">Изображение обрабатывается на устройстве</span>
+                </div>
+                {cameraError && <p role="alert" className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-relaxed text-amber-100">{cameraError} Нажмите «Камера», чтобы закрыть окно, затем попробуйте снова.</p>}
+                {!cameraError && <div className="camera-preview overflow-hidden rounded-xl border border-[#343d48] bg-[#090c11]">
+                  <video
+                    ref={cameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    aria-label="Предпросмотр камеры. Нажмите, чтобы выбрать цвет поверхности."
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleCameraSample}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        sampleCameraCenter();
+                      }
+                    }}
+                  />
+                  <canvas ref={cameraCanvasRef} className="hidden" aria-hidden="true" />
+                </div>}
+                <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Для камеры требуется разрешение браузера. Оттенок зависит от освещения и баланса белого; результат служит ориентиром.</p>
+                {cameraSample && <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+                  <div className="rounded-xl border border-[#303843] bg-[#0c1015] p-3">
+                    <div className="eyebrow">СНЯТЫЙ ЦВЕТ</div>
+                    <div className="mt-2 flex items-center gap-3">
+                      <span className="h-11 w-11 shrink-0 rounded-lg border border-white/15" style={{ backgroundColor: cameraSample.hex }} />
+                      <span className="font-mono text-sm font-bold text-slate-100">{cameraSample.hex}</span>
+                    </div>
+                    <div className="mt-3 border-t border-[#252c34] pt-3">
+                      <div className="text-[9px] font-semibold text-slate-500">СРАВНЕНИЕ С ВЫБРАННЫМ ОТТЕНКОМ</div>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <span className="h-7 w-7 shrink-0 rounded-md border border-white/10" style={{ backgroundColor: selected.hex }} />
+                        <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-slate-200">{selected.code} · {selected.name_ru}</span>
+                        <span className="shrink-0 text-[10px] text-slate-400">ΔE {selectedCameraDistance.toFixed(1)}</span>
+                      </div>
+                      <p className="mt-1 text-[9px] text-slate-500">Ориентировочное сходство: {similarityPercent(selectedCameraDistance)}%</p>
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-[#303843] bg-[#0c1015] p-3">
+                    <div className="eyebrow mb-2">БЛИЖАЙШИЕ ОТТЕНКИ ИЗ КАТАЛОГА</div>
+                    <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-1">
+                      {cameraMatches.map(({ color, distance }) => <button key={color.id} onClick={() => selectColor(color)} className="flex min-w-0 items-center gap-2 rounded-lg border border-[#252c34] bg-[#10151b] p-2 text-left transition hover:border-[var(--primary-400)]">
+                        <span className="h-8 w-8 shrink-0 rounded-md border border-white/10" style={{ backgroundColor: color.hex }} />
+                        <span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-bold text-slate-200">{color.code} · {color.name_ru}</span><span className="block text-[9px] text-slate-500">ΔE {distance.toFixed(1)} · сходство {similarityPercent(distance)}%</span></span>
+                        <ArrowRight size={13} className="shrink-0 text-slate-500" />
+                      </button>)}
+                    </div>
+                  </div>
+                </div>}
+              </section>}
               <div className={`grid ${comparison ? 'md:grid-cols-2' : 'grid-cols-1'} gap-px bg-[#252b33] lg:flex-1`}>
                 {comparison && <div className="min-h-[270px]">{visualizerContent(true)}</div>}
                 <div className="min-h-[270px]">{visualizerContent(false)}</div>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import baseColors from './colors.json' with { type: 'json' };
 import farrowBallColors from './farrowBall.js';
 import { estimateLrvFromHex } from './colorBase.js';
-import { deltaEFromLab, filterColors, getColorFamily, getColorRecommendations, rgbToLab } from './colorTools.js';
+import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './colorTools.js';
 
 const colors = [...baseColors, ...farrowBallColors];
 
@@ -11,6 +11,15 @@ test('converts black and white RGB values to expected Lab lightness', () => {
   assert.ok(Math.abs(rgbToLab([0, 0, 0])[0]) < 0.01);
   assert.ok(Math.abs(rgbToLab([255, 255, 255])[0] - 100) < 0.01);
   assert.equal(deltaEFromLab([0, 0, 0], [0, 0, 0]), 0);
+});
+
+test('ranks the closest catalog colors to a sampled RGB color', () => {
+  const matches = getClosestColorMatches(colors, [244, 244, 244], 3);
+  assert.equal(matches.length, 3);
+  assert.equal(matches[0].color.hex, '#F4F4F4');
+  assert.equal(matches[0].distance, 0);
+  assert.ok(matches[0].distance <= matches[1].distance);
+  assert.ok(matches[1].distance <= matches[2].distance);
 });
 
 test('keeps catalog IDs unique and estimates missing LRV from HEX', () => {

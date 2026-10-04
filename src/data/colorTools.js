@@ -15,6 +15,14 @@ export function deltaEFromLab(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+export function getClosestColorMatches(colors, rgb, limit = 3) {
+  const sampleLab = rgbToLab(rgb);
+  return colors
+    .map((color) => ({ color, distance: deltaEFromLab(sampleLab, rgbToLab(color.rgb)) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, limit);
+}
+
 function getHsl([r, g, b]) {
   const channels = [r, g, b].map((value) => value / 255);
   const maximum = Math.max(...channels);
