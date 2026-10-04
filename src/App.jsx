@@ -1160,27 +1160,25 @@ function App() {
       </main>
 
       {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/65" />
-        <div className="pointer-events-none absolute inset-0 border-[12px] border-black/5 sm:border-[20px]" />
         <section role="dialog" aria-modal="true" aria-labelledby="expanded-color-title" className="relative flex min-h-[100dvh] flex-col justify-between p-5 pt-[max(20px,env(safe-area-inset-top))] sm:p-8 sm:pt-[max(32px,env(safe-area-inset-top))]">
           <div className="flex items-start justify-between gap-4">
             <span className="rounded-full border border-white/20 bg-black/20 px-3 py-1.5 text-[10px] font-semibold tracking-[.12em] text-white/80 backdrop-blur">ПОЛНОЭКРАННЫЙ ОБРАЗЕЦ</span>
             <button autoFocus onClick={() => setExpandedColor(null)} aria-label="Закрыть полноэкранный образец" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-black/25 text-white shadow-lg backdrop-blur transition hover:bg-black/45"><X size={19} /></button>
           </div>
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8 text-center">
-            <div className="max-w-3xl text-white drop-shadow-[0_2px_18px_rgba(0,0,0,0.55)]">
-              <div className="text-[clamp(1rem,3vw,1.5rem)] font-semibold tracking-wide">{getCatalogLabel(expandedColor.catalog)}</div>
-              <h2 id="expanded-color-title" className="mt-2 font-['Manrope'] text-[clamp(3rem,15vw,9rem)] font-extrabold leading-none tracking-[-.06em]">{expandedColor.code}</h2>
-              <p className="mt-4 text-[clamp(1rem,4vw,2rem)] font-medium">{expandedColor.name_ru}</p>
-            </div>
-          </div>
-          <div className="relative mx-auto w-full max-w-2xl rounded-2xl border border-white/15 bg-black/35 p-4 text-white shadow-2xl backdrop-blur-xl sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="relative mx-auto w-full max-w-2xl rounded-2xl border border-white/15 bg-black/45 p-3.5 text-white shadow-2xl backdrop-blur-xl sm:p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[9px] font-bold tracking-[.12em] text-white/65">{getCatalogLabel(expandedColor.catalog)}</div>
+                <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <h2 id="expanded-color-title" className="font-['Manrope'] text-2xl font-extrabold leading-tight tracking-[-.04em] sm:text-3xl">{expandedColor.code}</h2>
+                  <p className="text-sm font-medium leading-snug text-white/90 sm:text-base">{expandedColor.name_ru}</p>
+                </div>
+              </div>
               <div><span className="block text-[9px] font-bold tracking-[.14em] text-white/55">ЦИФРОВОЙ ОБРАЗЕЦ</span><span className="mt-0.5 block font-mono text-lg font-semibold">{expandedColor.hex}</span></div>
-              <div className="flex items-center gap-2"><span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[10px] font-semibold">LRV {expandedColor.lrv}%</span><span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[10px] font-semibold">База {expandedColor.base}</span></div>
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2"><span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-semibold">LRV {expandedColor.lrv}%</span><span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-semibold">База {expandedColor.base}</span></div>
             {expandedColor.hexEstimated && <p className="mt-3 text-[10px] leading-relaxed text-white/70">Экранный оттенок приблизительный; цвет зависит от дисплея и освещения. Перед покупкой проверьте веер и сделайте пробный выкрас.</p>}
-            <button onClick={() => { selectColor(expandedColor); setExpandedColor(null); }} className="btn-primary mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"><Check size={16} />Выбрать этот цвет</button>
+            <button onClick={() => { selectColor(expandedColor); setExpandedColor(null); }} className="btn-primary mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-bold"><Check size={16} />Выбрать этот цвет</button>
           </div>
         </section>
       </div>}
