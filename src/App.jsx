@@ -12,7 +12,7 @@ import { Share } from '@capacitor/share';
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
-import { apiBaseUrl, apiRequest, setSessionToken } from './data/apiClient.js';
+import { apiBaseUrl, apiRequest } from './data/apiClient.js';
 import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
 import {
   createCustomCatalogDocument,
@@ -583,7 +583,6 @@ function App() {
   }, [clients, projects, customColors, customPaintProducts, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
 
   useEffect(() => {
-    setSessionToken('');
     if (!apiBaseUrl) return undefined;
     let active = true;
     apiRequest('/catalog', { token: '' })
@@ -605,7 +604,9 @@ function App() {
       .catch((error) => {
         if (active) setToast(error instanceof Error ? error.message : 'Не удалось загрузить общую базу.');
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -834,10 +835,6 @@ function App() {
   };
 
   const openCatalogEntryForm = (type, entry = null) => {
-    if (entry) {
-      setToast('Изменение существующих записей временно отключено.');
-      return;
-    }
     setEditingCatalogEntry(entry);
     if (type === 'color') {
       setCustomColorDraft(entry
@@ -874,8 +871,9 @@ function App() {
 
   const addCustomColor = async (event) => {
     event.preventDefault();
+    const editing = editingCatalogEntry;
     const color = normalizeCustomColor({
-      id: `custom-color-${globalThis.crypto.randomUUID()}`,
+      id: editing?.id ?? `custom-color-${globalThis.crypto.randomUUID()}`,
       code: customColorDraft.code,
       name_ru: customColorDraft.name,
       hex: customColorDraft.hex,
@@ -886,8 +884,13 @@ function App() {
     }
     setCatalogSavingId(color.id);
     try {
-      await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, { method: 'POST', body: JSON.stringify(color) });
-      setCustomColors((items) => [...items, color]);
+      await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify(color),
+      });
+      setCustomColors((items) => editing
+        ? items.map((item) => item.id === color.id ? color : item)
+        : [...items, color]);
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Не удалось сохранить цвет в GitHub.');
       setCatalogSavingId('');
@@ -907,11 +910,12 @@ function App() {
     setActiveMobileTab('Визуализация');
     setCatalogOpen(true);
     setCatalogManagerOpen(true);
-    setToast(`${color.code} добавлен в общую базу GitHub`);
+    setToast(editing ? `${color.code} обновлён в общей базе GitHub` : `${color.code} добавлен в общую базу GitHub`);
   };
 
   const addCustomPaintProduct = async (event) => {
     event.preventDefault();
+    const editing = editingCatalogEntry;
     const brand = customPaintDraft.brand.trim();
     const name = customPaintDraft.name.trim();
     const coverage = Number(customPaintDraft.coverage);
@@ -935,7 +939,7 @@ function App() {
     }
     const tintBases = customPaintDraft.tintable === false ? [] : customPaintDraft.tintBases.filter((base) => base === 'A' || base === 'C');
     const product = normalizeCustomPaintProduct({
-      id: `custom-paint-${globalThis.crypto.randomUUID()}`,
+      id: editing?.id ?? `custom-paint-${globalThis.crypto.randomUUID()}`,
       brand,
       name,
       finish: customPaintDraft.finish,
@@ -957,10 +961,12 @@ function App() {
     setCatalogSavingId(product.id);
     try {
       await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
-        method: 'POST',
+        method: editing ? 'PUT' : 'POST',
         body: JSON.stringify({ ...product, pricePerLiter }),
       });
-      setCustomPaintProducts((items) => [...items, product]);
+      setCustomPaintProducts((items) => editing
+        ? items.map((item) => item.id === product.id ? product : item)
+        : [...items, product]);
       setPaintPricesByProduct((prices) => {
         const next = { ...prices };
         if (pricePerLiter === null) delete next[product.id];
@@ -981,7 +987,39 @@ function App() {
     setEditingCatalogEntry(null);
     setCatalogManagerOpen(true);
     setActiveMobileTab('Краски');
-    setToast(`${product.brand} · ${product.name} добавлена в общую базу GitHub`);
+    setToast(editing
+      ? `${product.brand} · ${product.name} обновлена в общей базе GitHub`
+      : `${product.brand} · ${product.name} добавлена в общую базу GitHub`);
+  };
+
+  const deleteCatalogEntry = async (type, entry) => {
+    const label = type === 'color' ? `${entry.code} · ${entry.name_ru}` : `${entry.brand} · ${entry.name}`;
+    if (!window.confirm(`Удалить «${label}» из общей базы GitHub? Это действие нельзя отменить.`)) return;
+    setCatalogSavingId(entry.id);
+    try {
+      await apiRequest(`/catalog/${type === 'color' ? 'colors' : 'paints'}/${encodeURIComponent(entry.id)}`, {
+        method: 'DELETE',
+      });
+      if (type === 'color') {
+        setCustomColors((items) => items.filter((item) => item.id !== entry.id));
+        setComparisonIds((items) => items.filter((id) => id !== entry.id));
+        if (selectedId === entry.id) setSelectedId(colors[0].id);
+        if (expandedColor?.id === entry.id) setExpandedColor(null);
+      } else {
+        setCustomPaintProducts((items) => items.filter((item) => item.id !== entry.id));
+        setPaintPricesByProduct((prices) => {
+          const next = { ...prices };
+          delete next[entry.id];
+          return next;
+        });
+        if (paintProductId === entry.id) setPaintProductId(paintProducts[0]?.id ?? '');
+      }
+      setToast(`${label} удалён из общей базы GitHub.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось удалить запись из GitHub.');
+    } finally {
+      setCatalogSavingId('');
+    }
   };
 
   const savePaintPriceToGithub = async () => {
@@ -1840,7 +1878,7 @@ function App() {
         <section role="dialog" aria-modal="true" aria-labelledby="custom-entry-title" className="panel my-auto max-h-[calc(100dvh-24px)] w-full max-w-xl overflow-y-auto p-4 shadow-2xl sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <div className="eyebrow">НОВАЯ ЗАПИСЬ · ОБЩАЯ БАЗА</div>
+              <div className="eyebrow">{editingCatalogEntry ? 'РЕДАКТИРОВАНИЕ · ОБЩАЯ БАЗА' : 'НОВАЯ ЗАПИСЬ · ОБЩАЯ БАЗА'}</div>
               <h2 id="custom-entry-title" className="mt-1 font-['Manrope'] text-lg font-bold">{customEntryType === 'color' ? `${editingCatalogEntry ? 'Редактировать' : 'Добавить'} цвет` : `${editingCatalogEntry ? 'Редактировать' : 'Добавить'} краску`}</h2>
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">После сохранения запись сразу обновится в общей базе приватного GitHub.</p>
             </div>
@@ -1865,7 +1903,7 @@ function App() {
             </div>
             <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
               <button type="button" onClick={closeCatalogEntryForm} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
-              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />Сохранить цвет</button>
+              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />{editingCatalogEntry ? 'Сохранить изменения' : 'Сохранить цвет'}</button>
             </div>
           </form> : <form onSubmit={addCustomPaintProduct} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1940,7 +1978,7 @@ function App() {
             </fieldset>
             <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
               <button type="button" onClick={closeCatalogEntryForm} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
-              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />Сохранить краску</button>
+              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />{editingCatalogEntry ? 'Сохранить изменения' : 'Сохранить краску'}</button>
             </div>
           </form>}
         </section>
@@ -1954,6 +1992,10 @@ function App() {
         onClose={() => setCatalogManagerOpen(false)}
         onAddColor={() => openCatalogEntryForm('color')}
         onAddPaint={() => openCatalogEntryForm('paint')}
+        onEditColor={(color) => openCatalogEntryForm('color', color)}
+        onDeleteColor={(color) => deleteCatalogEntry('color', color)}
+        onEditPaint={(paint) => openCatalogEntryForm('paint', paint)}
+        onDeletePaint={(paint) => deleteCatalogEntry('paint', paint)}
       />
 
       {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>

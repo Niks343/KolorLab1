@@ -12,6 +12,7 @@ function createEnv(overrides = {}) {
     AUTH_KV: {
       async get(key) { return values.get(key) ?? null; },
       async put(key, value) { values.set(key, value); },
+      async delete(key) { values.delete(key); },
     },
     ...overrides,
   };
@@ -111,16 +112,33 @@ test('refuses catalog access when the configured GitHub repository is public', a
   }
 });
 
-test('public catalog endpoint rejects edits, deletes, and duplicate IDs', async () => {
+test('public catalog edits and deletes update GitHub records', async () => {
   const env = createEnv();
   const originalFetch = globalThis.fetch;
+  let storedRecord = { id: 'custom-color-one', code: 'D-01', name_ru: 'Тёплый камень', hex: '#AABBCC' };
+  let sha = 'existing-sha';
+  let githubWrites = 0;
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(String(url));
     if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
     if (parsed.pathname.endsWith('/custom-color-one.json')) {
-      return init.method === 'PUT'
-        ? Response.json({ content: { path: parsed.pathname } }, { status: 201 })
-        : Response.json({ sha: 'existing-sha', content: btoa(JSON.stringify({ id: 'custom-color-one' })) });
+      if (init.method === 'PUT') {
+        const body = JSON.parse(init.body);
+        assert.equal(body.sha, sha);
+        storedRecord = JSON.parse(Buffer.from(body.content, 'base64').toString('utf8'));
+        sha = 'updated-sha';
+        githubWrites += 1;
+        return Response.json({ content: { path: parsed.pathname } });
+      }
+      if (init.method === 'DELETE') {
+        assert.equal(JSON.parse(init.body).sha, sha);
+        storedRecord = null;
+        githubWrites += 1;
+        return Response.json({ commit: { sha: 'deleted-sha' } });
+      }
+      return storedRecord
+        ? Response.json({ sha, content: Buffer.from(JSON.stringify(storedRecord), 'utf8').toString('base64') })
+        : Response.json({ message: 'Not Found' }, { status: 404 });
     }
     assert.fail(`Unexpected request to ${parsed.href}`);
   };
@@ -134,15 +152,19 @@ test('public catalog endpoint rejects edits, deletes, and duplicate IDs', async 
 
     const update = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog/colors/custom-color-one', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.5' },
       body: JSON.stringify({ id: 'custom-color-one', code: 'D-02', name_ru: 'Другой цвет', hex: '#FFFFFF' }),
     }), env);
-    assert.equal(update.status, 405);
+    assert.equal(update.status, 200);
+    assert.equal(storedRecord.code, 'D-02');
 
     const deletion = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog/colors/custom-color-one', {
       method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '192.0.2.5' },
     }), env);
-    assert.equal(deletion.status, 405);
+    assert.equal(deletion.status, 200);
+    assert.equal(storedRecord, null);
+    assert.equal(githubWrites, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

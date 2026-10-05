@@ -1,17 +1,28 @@
-import { ShieldCheck, X } from 'lucide-react';
+import { Pencil, ShieldCheck, Trash2, X } from 'lucide-react';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from '../data/paintCatalog.js';
 
-function RecordRow({ title, subtitle, color }) {
+function RecordRow({ title, subtitle, color, actions }) {
   return <article className="flex min-w-0 items-center gap-3 rounded-xl border border-[#2b323c] bg-[#0d1117] p-3">
     {color && <span className="h-10 w-10 shrink-0 rounded-lg border border-white/10" style={{ backgroundColor: color }} />}
     <div className="min-w-0 flex-1">
       <p className="truncate text-xs font-semibold text-slate-100">{title}</p>
       <p className="mt-1 truncate text-[10px] text-slate-500">{subtitle}</p>
     </div>
+    {actions}
   </article>;
 }
 
-export default function CatalogManagementDialog({ open, colors, paints, busyId, onClose, onAddColor, onAddPaint }) {
+function RecordActions({ busy, onEdit, onDelete }) {
+  return <div className="flex shrink-0 items-center gap-1">
+    <button type="button" disabled={busy} onClick={onEdit} aria-label="Редактировать запись" title="Редактировать" className="icon-button h-8 w-8 rounded-lg text-slate-400 disabled:opacity-50"><Pencil size={14} /></button>
+    <button type="button" disabled={busy} onClick={onDelete} aria-label="Удалить запись" title="Удалить" className="icon-button h-8 w-8 rounded-lg text-rose-300 disabled:opacity-50"><Trash2 size={14} /></button>
+  </div>;
+}
+
+export default function CatalogManagementDialog({
+  open, colors, paints, busyId, onClose, onAddColor, onAddPaint,
+  onEditColor, onDeleteColor, onEditPaint, onDeletePaint,
+}) {
   if (!open) return null;
 
   return <div className="fixed inset-0 z-[85] flex items-center justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -20,7 +31,7 @@ export default function CatalogManagementDialog({ open, colors, paints, busyId, 
         <div>
           <div className="eyebrow flex items-center gap-2"><ShieldCheck size={13} className="text-emerald-300" />ОБЩАЯ БАЗА · СОХРАНЕНИЕ В GITHUB</div>
           <h2 id="catalog-management-title" className="mt-1 font-['Manrope'] text-lg font-bold">Общая база цветов и красок</h2>
-          <p className="mt-1 text-[10px] text-slate-500">Можно добавлять новые записи. Изменение и удаление существующих записей отключены.</p>
+          <p className="mt-1 text-[10px] text-slate-500">Все посетители могут добавлять, редактировать и удалять записи общей базы.</p>
         </div>
         <button type="button" onClick={onClose} aria-label="Закрыть управление базой" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
       </div>
@@ -31,7 +42,7 @@ export default function CatalogManagementDialog({ open, colors, paints, busyId, 
             <button type="button" onClick={onAddColor} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить цвет</button>
           </div>
           <div className="grid gap-2">
-            {colors.map((color) => <RecordRow key={color.id} title={`${color.code} · ${color.name_ru}`} subtitle={`${color.hex} · База ${color.base}`} color={color.hex} />)}
+            {colors.map((color) => <RecordRow key={color.id} title={`${color.code} · ${color.name_ru}`} subtitle={`${color.hex} · База ${color.base}`} color={color.hex} actions={<RecordActions busy={busyId === color.id} onEdit={() => onEditColor(color)} onDelete={() => onDeleteColor(color)} />} />)}
             {!colors.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">В пользовательской базе пока нет цветов.</p>}
           </div>
         </section>
@@ -49,12 +60,12 @@ export default function CatalogManagementDialog({ open, colors, paints, busyId, 
               const tinting = metadata.tintable === true
                 ? `Колеруется${metadata.tintBases.length ? ` · база ${metadata.tintBases.join('/')}` : ''}`
                 : metadata.tintable === false ? 'Не колеруется' : 'Колеровка не указана';
-              return <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={[category, applications.join(', '), tinting, materials.join(', '), paint.coverageDescription].filter(Boolean).join(' · ')} />;
+              return <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={[category, applications.join(', '), tinting, materials.join(', '), paint.coverageDescription].filter(Boolean).join(' · ')} actions={<RecordActions busy={busyId === paint.id} onEdit={() => onEditPaint(paint)} onDelete={() => onDeletePaint(paint)} />} />;
             })}
             {!paints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">В пользовательской базе пока нет красок.</p>}
           </div>
         </section>
-        {busyId && <p role="status" className="text-center text-[10px] text-slate-400">Сохраняем изменения в приватный GitHub…</p>}
+        {busyId && <p role="status" className="text-center text-[10px] text-slate-400">Синхронизируем изменения с приватным GitHub…</p>}
       </div>
     </section>
   </div>;

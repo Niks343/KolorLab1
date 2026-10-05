@@ -208,6 +208,37 @@ async function createGithubFile(env, path, value, message) {
   });
 }
 
+async function updateGithubFile(env, path, value, message) {
+  await ensurePrivateRepository(env);
+  const existing = await readGithubFile(env, path);
+  if (!existing) throw new HttpError(404, 'Запись не найдена в общей базе GitHub.');
+  const content = base64UrlEncode(new TextEncoder().encode(JSON.stringify(value, null, 2)))
+    .replace(/-/g, '+').replace(/_/g, '/');
+  return githubRequest(env, repositoryPath(env, path), {
+    method: 'PUT',
+    body: JSON.stringify({
+      message,
+      sha: existing.sha,
+      content: content.padEnd(Math.ceil(content.length / 4) * 4, '='),
+      branch: env.GITHUB_BRANCH || 'main',
+    }),
+  });
+}
+
+async function deleteGithubFile(env, path, message) {
+  await ensurePrivateRepository(env);
+  const existing = await readGithubFile(env, path);
+  if (!existing) throw new HttpError(404, 'Запись не найдена в общей базе GitHub.');
+  return githubRequest(env, repositoryPath(env, path), {
+    method: 'DELETE',
+    body: JSON.stringify({
+      message,
+      sha: existing.sha,
+      branch: env.GITHUB_BRANCH || 'main',
+    }),
+  });
+}
+
 async function listGithubDirectory(env, path) {
   const contents = await githubRequest(env, repositoryPath(env, path), { allowNotFound: true });
   if (!contents) return [];
@@ -245,15 +276,26 @@ async function handleCatalog(request, env, pathSegments) {
   const directory = directories[kind];
   if (!directory || pathSegments.length !== 2) throw new HttpError(404, 'Маршрут каталога не найден.');
   const id = safeId(decodeURIComponent(rawId));
-  if (request.method !== 'POST') {
-    throw new HttpError(405, 'Сейчас разрешено только добавление новых записей. Изменение и удаление отключены.');
+  const path = `catalog/${directory}/${id}.json`;
+  if (request.method === 'POST') {
+    await limitByIp(request, env, 'catalog-create-ip', 10, 3600);
+    const body = await readJson(request);
+    const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
+    await createGithubFile(env, path, value, `catalog: add ${kind} ${id}`);
+    return json({ ok: true, record: value }, 201);
   }
-
-  await limitByIp(request, env, 'catalog-create-ip', 10, 3600);
+  if (request.method !== 'PUT' && request.method !== 'DELETE') {
+    throw new HttpError(405, 'Для этой записи разрешено добавление, редактирование и удаление.');
+  }
+  await limitByIp(request, env, 'catalog-edit-delete-ip', 60, 3600);
+  if (request.method === 'DELETE') {
+    await deleteGithubFile(env, path, `catalog: delete ${kind} ${id}`);
+    return json({ ok: true });
+  }
   const body = await readJson(request);
   const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
-  await createGithubFile(env, `catalog/${directory}/${id}.json`, value, `catalog: add ${kind} ${id}`);
-  return json({ ok: true, record: value }, 201);
+  await updateGithubFile(env, path, value, `catalog: update ${kind} ${id}`);
+  return json({ ok: true, record: value });
 }
 
 async function handleApi(request, env) {
@@ -273,8 +315,8 @@ export function createWorkerResponse(request, env) {
     Vary: 'Origin',
     ...(allowedOrigins.includes(origin) ? {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
       'Access-Control-Max-Age': '86400',
     } : {}),
   };
