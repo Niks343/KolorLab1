@@ -28,6 +28,8 @@ jobs:
       - name: Run tests
         run: npm test
       - name: Build site
+        env:
+          VITE_KOLORLAB_API_URL: ${{ vars.KOLORLAB_API_URL }}
         run: npm run build -- --base=/KolorLab1/
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3

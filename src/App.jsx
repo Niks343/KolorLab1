@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowDownUp, ArrowRight, Building2, Camera, Check, ChevronDown, Copy, Droplets, FileDown, FileUp,
   Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
-  Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
+  Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
@@ -12,6 +12,7 @@ import { Share } from '@capacitor/share';
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
+import { apiBaseUrl, apiRequest, setSessionToken } from './data/apiClient.js';
 import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
 import {
   createCustomCatalogDocument,
@@ -25,6 +26,7 @@ import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
 import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
 import plasterImage from './assets/surfaces/plaster.jpg';
 import kolorlabLogo from './assets/kolorlab-logo.png';
+import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
 
 const colors = [
   ...baseColors.map((color) => {
@@ -248,16 +250,20 @@ function readWorkspace() {
         id: client.id,
         name: client.name,
         phoneLast4: String(client.phoneLast4 ?? '').replace(/\D/g, '').slice(-4),
+        remote: client.remote === true,
       }));
     const clientIds = new Set(clients.map((client) => client.id));
     const projects = parsed.projects.flatMap((item) => {
       if (!item || typeof item.key !== 'string' || !clientIds.has(item.clientId)) return [];
       const colorId = item.color?.id;
       const color = typeof colorId === 'string'
-        ? availableColorsById.get(colorId) ?? getArchivedWoodProjectColor(colorId)
+        ? availableColorsById.get(colorId) ?? normalizeCustomColor(item.color) ?? getArchivedWoodProjectColor(colorId)
         : null;
       if (!color) return [];
       const surfaceId = surfaces.some((surfaceItem) => surfaceItem.id === item.surface) ? item.surface : 'wall';
+      const savedPaintProduct = typeof item.paintProduct?.id === 'string'
+        ? availablePaintProductsById.get(item.paintProduct.id) ?? normalizeCustomPaintProduct(item.paintProduct)
+        : null;
       return [{
         key: item.key,
         clientId: item.clientId,
@@ -269,11 +275,8 @@ function readWorkspace() {
         zone: zones.includes(item.zone) ? item.zone : 'Гостиная',
         liters: Number.isFinite(item.liters) ? item.liters : 0,
         cans: typeof item.cans === 'string' ? item.cans : '',
-        paintProduct: typeof item.paintProduct?.id === 'string' && availablePaintProductsById.has(item.paintProduct.id)
-          ? {
-            ...availablePaintProductsById.get(item.paintProduct.id),
-            pricePerLiter: Number.isFinite(item.paintProduct.pricePerLiter) ? item.paintProduct.pricePerLiter : null,
-          }
+        paintProduct: savedPaintProduct
+          ? { ...savedPaintProduct, pricePerLiter: Number.isFinite(item.paintProduct.pricePerLiter) ? item.paintProduct.pricePerLiter : null }
           : null,
         area: Number.isFinite(item.area) ? item.area : null,
         layers: Number.isFinite(item.layers) ? item.layers : null,
@@ -415,6 +418,8 @@ function App() {
   const [confirmClientDeletion, setConfirmClientDeletion] = useState(false);
   const clientCardTriggerRef = useRef(null);
   const clientCardCloseRef = useRef(null);
+  const remoteCatalogIdsRef = useRef(null);
+  const legacyCatalogSyncStartedRef = useRef(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState('Визуализация');
   const [copied, setCopied] = useState(false);
@@ -429,9 +434,14 @@ function App() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [cameraSample, setCameraSample] = useState(null);
+  const [apiUser, setApiUser] = useState(null);
+  const [remoteCatalogLoaded, setRemoteCatalogLoaded] = useState(!apiBaseUrl);
+  const [catalogManagerOpen, setCatalogManagerOpen] = useState(false);
+  const [catalogSavingId, setCatalogSavingId] = useState('');
   const [customEntryType, setCustomEntryType] = useState('');
+  const [editingCatalogEntry, setEditingCatalogEntry] = useState(null);
   const [customColorDraft, setCustomColorDraft] = useState({ code: '', name: '', hex: '#71806A' });
-  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [] });
+  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
@@ -475,12 +485,15 @@ function App() {
     : null;
   const currentSurface = surfaces.find((item) => item.id === surface) ?? surfaces[0];
   const currentTemperature = temperatures.find((item) => item.value === temperature) ?? temperatures[1];
-  const activeClient = clients.find((client) => client.id === activeClientId) ?? null;
-  const openedClientCard = clients.find((client) => client.id === clientCardId) ?? null;
+  const visibleClients = clients.filter((client) => !client.remote || apiUser);
+  const activeClientRecord = clients.find((client) => client.id === activeClientId) ?? null;
+  const activeClient = activeClientRecord && (!activeClientRecord.remote || apiUser) ? activeClientRecord : null;
+  const openedClientRecord = clients.find((client) => client.id === clientCardId) ?? null;
+  const openedClientCard = openedClientRecord && (!openedClientRecord.remote || apiUser) ? openedClientRecord : null;
   const openedClientProjects = openedClientCard
     ? projects.filter((item) => item.clientId === openedClientCard.id)
     : [];
-  const clientProjects = projects.filter((item) => item.clientId === activeClientId && item.projectName === activeProjectName);
+  const clientProjects = activeClient ? projects.filter((item) => item.clientId === activeClient.id && item.projectName === activeProjectName) : [];
   const paintCoverage = selectedPaintProduct?.coverageBySurface[surface] ?? null;
   const minimumLiters = paintCoverage ? area * layers / paintCoverage[1] : area * layers / currentSurface.rate;
   const liters = paintCoverage ? area * layers / paintCoverage[0] : area * layers / currentSurface.rate;
@@ -531,18 +544,20 @@ function App() {
         key,
         clientId,
         projectName,
-        color: { id: color.id },
+        color,
         zone,
         area: projectArea,
         layers: projectLayers,
         surface: projectSurface,
         liters: projectLiters,
         cans: projectCans,
-        paintProduct: paintProduct ? { id: paintProduct.id, pricePerLiter: paintProduct.pricePerLiter } : null,
+        paintProduct: paintProduct ? { ...paintProduct, pricePerLiter: paintProduct.pricePerLiter } : null,
       }));
       window.localStorage.setItem(workspaceStorageKey, JSON.stringify({
         version: 2,
-        clients: clients.map(({ id, name, phoneLast4 }) => ({ id, name, phoneLast4 })),
+        clients: clients.map(({ id, name, phoneLast4, remote }) => remote
+          ? { id, name: 'Клиент', phoneLast4: '', remote: true }
+          : { id, name, phoneLast4 }),
         projects: storedProjects,
         customColors,
         customPaintProducts,
@@ -565,6 +580,91 @@ function App() {
       setPersistenceError(true);
     }
   }, [clients, projects, customColors, customPaintProducts, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
+
+  useEffect(() => {
+    setSessionToken('');
+    if (!apiBaseUrl) return undefined;
+    let active = true;
+    apiRequest('/catalog', { token: '' })
+      .then(({ colors: remoteColors = [], paintProducts: remotePaints = [] }) => {
+        if (!active) return;
+        const normalizedColors = remoteColors.map(normalizeCustomColor).filter(Boolean);
+        const normalizedPaints = remotePaints.map(normalizeCustomPaintProduct).filter(Boolean);
+        remoteCatalogIdsRef.current = new Set([...normalizedColors, ...normalizedPaints].map((entry) => entry.id));
+        setCustomColors((local) => mergeCustomCatalog(local, normalizedColors).entries);
+        setCustomPaintProducts((local) => mergeCustomCatalog(local, normalizedPaints).entries);
+        setRemoteCatalogLoaded(true);
+        setPaintPricesByProduct((prices) => ({
+          ...prices,
+          ...Object.fromEntries(remotePaints
+            .filter((paint) => typeof paint?.id === 'string' && Number.isFinite(paint.pricePerLiter) && paint.pricePerLiter >= 0)
+            .map((paint) => [paint.id, paint.pricePerLiter])),
+        }));
+      })
+      .catch((error) => {
+        if (active) setToast(error instanceof Error ? error.message : 'Не удалось загрузить общую базу.');
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!apiUser?.isAdmin || !remoteCatalogLoaded || !remoteCatalogIdsRef.current || legacyCatalogSyncStartedRef.current) return;
+    const missingColors = customColors.filter((color) => !remoteCatalogIdsRef.current.has(color.id));
+    const missingPaints = customPaintProducts.filter((paint) => !remoteCatalogIdsRef.current.has(paint.id));
+    legacyCatalogSyncStartedRef.current = true;
+    if (!missingColors.length && !missingPaints.length) return;
+    const syncLegacyCatalog = async () => {
+      let savedCount = 0;
+      try {
+        for (const color of missingColors) {
+          await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, { method: 'PUT', body: JSON.stringify(color) });
+          savedCount += 1;
+        }
+        for (const paint of missingPaints) {
+          await apiRequest(`/catalog/paints/${encodeURIComponent(paint.id)}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              ...paint,
+              pricePerLiter: Number.isFinite(paintPricesByProduct[paint.id]) ? paintPricesByProduct[paint.id] : null,
+            }),
+          });
+          savedCount += 1;
+        }
+        missingColors.concat(missingPaints).forEach((entry) => remoteCatalogIdsRef.current.add(entry.id));
+        setToast(`${savedCount} старых записей перенесено в общую базу GitHub`);
+      } catch (error) {
+        setToast(`${savedCount} старых записей сохранено; перенос остановлен: ${error instanceof Error ? error.message : 'ошибка GitHub'}. Обновите страницу, чтобы повторить.`);
+      }
+    };
+    syncLegacyCatalog();
+  }, [apiUser, remoteCatalogLoaded, customColors, customPaintProducts, paintPricesByProduct]);
+
+  useEffect(() => {
+    if (!apiUser || !apiBaseUrl) return undefined;
+    let active = true;
+    apiRequest('/clients')
+      .then(({ clients: remoteClients = [] }) => {
+        if (!active) return;
+        const savedClients = remoteClients
+          .filter((client) => typeof client.id === 'string' && typeof client.name === 'string' && typeof client.phoneLast4 === 'string')
+          .map((client) => ({ id: client.id, name: client.name, phoneLast4: client.phoneLast4, remote: true }));
+        setClients((local) => {
+          const merged = new Map(local.map((client) => [client.id, client]));
+          savedClients.forEach((client) => merged.set(client.id, client));
+          return [...merged.values()];
+        });
+        const savedClientsById = new Map(savedClients.map((client) => [client.id, client]));
+        setProjects((items) => items.map((project) => {
+          const client = savedClientsById.get(project.clientId);
+          return client ? { ...project, clientName: client.name, clientPhoneLast4: client.phoneLast4 } : project;
+        }));
+        if (!activeClientId && savedClients.length) setActiveClientId(savedClients[0].id);
+      })
+      .catch((error) => {
+        if (active) setToast(error instanceof Error ? error.message : 'Не удалось загрузить карточки клиентов.');
+      });
+    return () => { active = false; };
+  }, [apiUser]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -640,11 +740,15 @@ function App() {
   useEffect(() => {
     if (!customEntryType) return undefined;
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setCustomEntryType('');
+      if (event.key === 'Escape') {
+        setCustomEntryType('');
+        setEditingCatalogEntry(null);
+        setCatalogManagerOpen(true);
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [customEntryType]);
+  }, [apiUser?.isAdmin, customEntryType]);
 
   useEffect(() => {
     const hiddenOnMobileTab = activeMobileTab !== 'Визуализация'
@@ -728,10 +832,45 @@ function App() {
     setCatalogOpen(false);
   };
 
-  const addCustomColor = (event) => {
+  const openCatalogEntryForm = (type, entry = null) => {
+    if (entry) {
+      setToast('Изменение существующих записей временно отключено.');
+      return;
+    }
+    setEditingCatalogEntry(entry);
+    if (type === 'color') {
+      setCustomColorDraft(entry
+        ? { code: entry.code, name: entry.name_ru, hex: entry.hex }
+        : { code: '', name: '', hex: '#71806A' });
+    } else {
+      const firstCoverage = Object.values(entry?.coverageBySurface ?? {})[0]?.[0] ?? 10;
+      setCustomPaintDraft(entry ? {
+        brand: entry.brand,
+        name: entry.name,
+        coverage: String(firstCoverage),
+        packages: entry.packageSizesLiters?.join(', ') ?? '',
+        finish: entry.finish === 'Не указано' ? '' : entry.finish,
+        purpose: entry.purpose,
+        baseSystem: entry.baseSystem === 'Совместимость баз не указана.' ? '' : entry.baseSystem,
+        surfaces: [...entry.surfaces],
+        tintBases: [...(entry.tintBases ?? [])],
+        pricePerLiter: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
+      } : { brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
+    }
+    setCatalogManagerOpen(false);
+    setCustomEntryType(type);
+  };
+
+  const closeCatalogEntryForm = () => {
+    setCustomEntryType('');
+    setEditingCatalogEntry(null);
+    setCatalogManagerOpen(true);
+  };
+
+  const addCustomColor = async (event) => {
     event.preventDefault();
     const color = normalizeCustomColor({
-      id: `custom-color-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+      id: `custom-color-${globalThis.crypto.randomUUID()}`,
       code: customColorDraft.code,
       name_ru: customColorDraft.name,
       hex: customColorDraft.hex,
@@ -740,9 +879,19 @@ function App() {
       setToast('Укажите название и код цвета, а также корректный HEX');
       return;
     }
-    setCustomColors((items) => [...items, color]);
+    setCatalogSavingId(color.id);
+    try {
+      await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, { method: 'POST', body: JSON.stringify(color) });
+      setCustomColors((items) => [...items, color]);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось сохранить цвет в GitHub.');
+      setCatalogSavingId('');
+      return;
+    }
+    setCatalogSavingId('');
     setSelectedId(color.id);
     setCustomEntryType('');
+    setEditingCatalogEntry(null);
     setCustomColorDraft({ code: '', name: '', hex: '#71806A' });
     setCatalog(customColorsCatalog);
     setSearch('');
@@ -752,38 +901,43 @@ function App() {
     setLightnessFilter('Любая светлота');
     setActiveMobileTab('Цвет');
     setCatalogOpen(true);
-    setToast(`${color.code} добавлен в ваши цвета`);
+    setCatalogManagerOpen(true);
+    setToast(`${color.code} добавлен в общую базу GitHub`);
   };
 
-  const addCustomPaintProduct = (event) => {
+  const addCustomPaintProduct = async (event) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const brand = String(formData.get('brand') ?? '').trim();
-    const name = String(formData.get('name') ?? '').trim();
-    const coverage = Number(formData.get('coverage'));
-    const selectedSurfaces = formData.getAll('surface').filter((id) => surfacesCatalogIds.has(id));
-    const packageInput = String(formData.get('packages') ?? '').trim();
+    const brand = customPaintDraft.brand.trim();
+    const name = customPaintDraft.name.trim();
+    const coverage = Number(customPaintDraft.coverage);
+    const selectedSurfaces = customPaintDraft.surfaces.filter((id) => surfacesCatalogIds.has(id));
+    const packageInput = customPaintDraft.packages.trim();
     const packageSizes = packageInput
       ? packageInput.split(',').map((item) => Number(item.trim()))
       : [];
+    const pricePerLiter = customPaintDraft.pricePerLiter.trim() ? Number(customPaintDraft.pricePerLiter) : null;
     if (!brand || !name || !Number.isFinite(coverage) || coverage <= 0 || coverage > 100 || !selectedSurfaces.length) {
       setToast('Заполните бренд, название, расход и выберите поверхности');
+      return;
+    }
+    if (pricePerLiter !== null && (!Number.isFinite(pricePerLiter) || pricePerLiter < 0 || pricePerLiter > 1_000_000)) {
+      setToast('Укажите корректную цену за литр или оставьте поле пустым.');
       return;
     }
     if (packageInput && (!packageSizes.length || packageSizes.some((size) => !Number.isFinite(size) || size <= 0 || size > 100))) {
       setToast('Укажите фасовки числами через запятую, например: 0.9, 2.7, 9');
       return;
     }
-    const tintBases = formData.getAll('tintBase').filter((base) => base === 'A' || base === 'C');
+    const tintBases = customPaintDraft.tintBases.filter((base) => base === 'A' || base === 'C');
     const product = normalizeCustomPaintProduct({
-      id: `custom-paint-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+      id: `custom-paint-${globalThis.crypto.randomUUID()}`,
       brand,
       name,
-      finish: String(formData.get('finish') ?? ''),
-      purpose: String(formData.get('purpose') ?? ''),
+      finish: customPaintDraft.finish,
+      purpose: customPaintDraft.purpose,
       coverageBySurface: Object.fromEntries(selectedSurfaces.map((id) => [id, [coverage, coverage]])),
       coverageDescription: `${coverage.toLocaleString('ru-RU')} м²/л · значение задано пользователем`,
-      baseSystem: String(formData.get('baseSystem') ?? ''),
+      baseSystem: customPaintDraft.baseSystem,
       packageSizesLiters: packageSizes,
       tintBases,
     });
@@ -791,13 +945,52 @@ function App() {
       setToast('Не удалось проверить параметры краски. Проверьте поля и попробуйте снова.');
       return;
     }
-    setCustomPaintProducts((items) => [...items, product]);
+    setCatalogSavingId(product.id);
+    try {
+      await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ ...product, pricePerLiter }),
+      });
+      setCustomPaintProducts((items) => [...items, product]);
+      setPaintPricesByProduct((prices) => {
+        const next = { ...prices };
+        if (pricePerLiter === null) delete next[product.id];
+        else next[product.id] = pricePerLiter;
+        return next;
+      });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось сохранить краску в GitHub.');
+      setCatalogSavingId('');
+      return;
+    }
+    setCatalogSavingId('');
     setPaintProductId(product.id);
     if (!product.surfaces.includes(surface)) setSurface(product.surfaces[0]);
     const nextPreview = visualSurfaces.find((item) => product.surfaces.includes(item.calculatorSurface));
     if (nextPreview) setPreviewSurface(nextPreview.id);
     setCustomEntryType('');
-    setToast(`${product.brand} · ${product.name} добавлена в мои краски`);
+    setEditingCatalogEntry(null);
+    setCatalogManagerOpen(true);
+    setToast(`${product.brand} · ${product.name} добавлена в общую базу GitHub`);
+  };
+
+  const savePaintPriceToGithub = async () => {
+    const product = customPaintProducts.find((item) => item.id === paintProductId);
+    if (!apiUser?.isAdmin || !product) return;
+    setCatalogSavingId(product.id);
+    try {
+      await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...product,
+          pricePerLiter: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
+        }),
+      });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось сохранить цену краски в GitHub.');
+    } finally {
+      setCatalogSavingId('');
+    }
   };
 
   const exportCustomCatalog = async () => {
@@ -855,11 +1048,26 @@ function App() {
     const file = input.files?.[0];
     if (!file) return;
     try {
+      if (!apiUser?.isAdmin) throw new Error('Импортировать записи может только администратор.');
       if (file.size > 2 * 1024 * 1024) throw new Error('Файл слишком большой. Максимальный размер — 2 МБ.');
       const document = JSON.parse(await file.text());
       const imported = parseCustomCatalogDocument(document);
       const colorMerge = mergeCustomCatalog(customColors, imported.colors);
       const paintMerge = mergeCustomCatalog(customPaintProducts, imported.paintProducts);
+      const writes = [
+        ...imported.colors.map((color) => apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(color),
+        })),
+        ...imported.paintProducts.map((paint) => apiRequest(`/catalog/paints/${encodeURIComponent(paint.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...paint,
+            pricePerLiter: imported.paintPricesByProduct[paint.id] ?? null,
+          }),
+        })),
+      ];
+      await Promise.all(writes);
       setCustomColors(colorMerge.entries);
       setCustomPaintProducts(paintMerge.entries);
       setPaintPricesByProduct((prices) => ({ ...prices, ...imported.paintPricesByProduct }));
@@ -1028,30 +1236,65 @@ function App() {
     setToast(`Создан проект «${name}»`);
   };
 
-  const addClient = (event) => {
+  const addClient = async (event) => {
     event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    if (!apiUser) {
+      setToast('Вход для управления клиентами временно отключён.');
+      return;
+    }
+    if (!apiUser.isAdmin) {
+      setToast('Создавать карточки других клиентов может только администратор.');
+      return;
+    }
     const name = clientNameInput.trim();
     const phoneDigits = clientPhoneInput.replace(/\D/g, '');
     if (!name || phoneDigits.length < 10) {
       setToast('Укажите имя клиента и номер телефона');
       return;
     }
-    const client = {
-      id: `client-${Date.now()}`,
-      name,
-      phoneLast4: phoneDigits.slice(-4),
-    };
-    setClients((items) => [...items, client]);
+    if (formData.get('clientConsent') !== 'on') {
+      setToast('Подтвердите согласие клиента на хранение номера телефона.');
+      return;
+    }
+    let client;
+    try {
+      const { client: savedClient } = await apiRequest('/clients', {
+        method: 'PUT',
+        body: JSON.stringify({ name, phone: clientPhoneInput, consent: true }),
+      });
+      client = { id: savedClient.id, name: savedClient.name, phoneLast4: savedClient.phoneLast4, remote: true };
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось сохранить клиента в GitHub.');
+      return;
+    }
+    setClients((items) => {
+      const next = new Map(items.map((item) => [item.id, item]));
+      next.set(client.id, client);
+      return [...next.values()];
+    });
     setActiveClientId(client.id);
     setClientNameInput('');
     setClientPhoneInput('');
     setDrawerOpen(false);
-    setToast(`Клиент ${client.name} добавлен`);
+    setToast(`Клиент ${client.name} сохранён в приватной базе GitHub`);
   };
 
-  const deleteClient = () => {
+  const deleteClient = async () => {
     if (!openedClientCard) return;
+    if (!apiUser?.isAdmin) {
+      setToast('Удалять карточки клиентов может только администратор.');
+      return;
+    }
     const removedProjectCount = openedClientProjects.length;
+    if (!openedClientCard.id.startsWith('client-')) {
+      try {
+        await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}`, { method: 'DELETE' });
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : 'Не удалось удалить клиента из GitHub.');
+        return;
+      }
+    }
     setClients((items) => items.filter((client) => client.id !== openedClientCard.id));
     setProjects((items) => items.filter((item) => item.clientId !== openedClientCard.id));
     if (activeClientId === openedClientCard.id) setActiveClientId('');
@@ -1131,6 +1374,7 @@ function App() {
         <div className="hidden items-center gap-2 rounded-full border border-[#2b323c] bg-[#11151b] px-3 py-1.5 text-[11px] text-slate-400 md:flex"><span className="h-1.5 w-1.5 rounded-full bg-[var(--primary-400)]" />Цифровой подбор цвета <span className="ml-1 text-slate-600">·</span> Москва</div>
         <div className="flex items-center gap-2">
           <button onClick={() => setCatalogOpen(true)} aria-expanded={catalogOpen} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:hidden"><Paintbrush size={15} /><span className="hidden sm:inline">Каталог цветов</span><span className="sm:hidden">Каталог</span></button>
+          {apiBaseUrl && <button onClick={() => setCatalogManagerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShieldCheck size={15} /><span>Добавить в базу</span></button>}
           <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShoppingBag size={15} /><span className="hidden sm:inline">Мой проект</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
         </div>
       </header>
@@ -1249,7 +1493,6 @@ function App() {
               <section className="mb-3 rounded-xl border border-[#2a313a] bg-[#0d1117] p-3" aria-label="Каталог лакокрасочных материалов">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <label htmlFor="paint-product" className="text-[10px] font-semibold text-slate-500">КАТАЛОГ ЛАКОКРАСОЧНЫХ МАТЕРИАЛОВ</label>
-                  <button type="button" onClick={() => setCustomEntryType('paint')} className="flex items-center gap-1 rounded-md border border-[#343d48] px-2 py-1 text-[9px] font-semibold text-slate-300 transition hover:border-[var(--primary-400)] hover:text-[var(--primary-100)]"><Plus size={11} />Добавить свою краску</button>
                 </div>
                 <div className="relative">
                   <select id="paint-product" value={paintProductId} onChange={(event) => {
@@ -1290,7 +1533,7 @@ function App() {
                   </div>
                   <label className="flex items-center gap-2 text-[10px] text-slate-500">
                     <span className="shrink-0">Ваша цена, ₽/л</span>
-                    <input type="number" min="0" step="0.01" value={Number.isFinite(paintPricePerLiter) ? paintPricePerLiter : ''} onChange={(event) => {
+                    <input type="number" min="0" step="0.01" value={Number.isFinite(paintPricePerLiter) ? paintPricePerLiter : ''} onBlur={savePaintPriceToGithub} onChange={(event) => {
                       const value = event.target.value;
                       setPaintPricesByProduct((prices) => {
                         const next = { ...prices };
@@ -1324,7 +1567,7 @@ function App() {
                   <div className="relative">
                     <select id="project-client" value={activeClientId} onChange={(event) => setActiveClientId(event.target.value)} className="field w-full appearance-none rounded-lg px-3 py-2.5 pr-8 text-xs">
                       <option value="">Выберите клиента</option>
-                      {clients.map((client) => <option key={client.id} value={client.id}>{client.name} · •••• {client.phoneLast4}</option>)}
+                      {visibleClients.map((client) => <option key={client.id} value={client.id}>{client.name}{client.phoneLast4 ? ` · •••• ${client.phoneLast4}` : ''}</option>)}
                     </select>
                     <ChevronDown size={13} className="pointer-events-none absolute right-3 top-3 text-slate-500" />
                   </div>
@@ -1398,7 +1641,7 @@ function App() {
             </div>
             <div className="flex shrink-0 items-start gap-3">
               <div className="hidden items-center gap-2 text-[10px] text-slate-500 sm:flex"><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-300" />База A</span><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-300" />База C</span></div>
-              <button onClick={() => setCustomEntryType('color')} className="btn-secondary flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold sm:px-3 sm:text-xs"><Plus size={14} /><span>Добавить цвет</span></button>
+              {apiBaseUrl && <button onClick={() => setCatalogManagerOpen(true)} className="btn-secondary flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold sm:px-3 sm:text-xs"><ShieldCheck size={14} /><span>Добавить</span></button>}
               <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="catalog-close-button icon-button h-9 shrink-0 rounded-lg px-2 text-slate-400"><span className="catalog-close-label">Закрыть каталог</span><X size={18} className="catalog-close-icon" /></button>
             </div>
           </div>
@@ -1406,12 +1649,12 @@ function App() {
           <div className="my-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2a313a] bg-[#0c1015] px-3 py-2.5">
             <div className="text-[10px] text-slate-400">
               Ваша база: <strong className="text-slate-200">{customColors.length} цветов</strong> · <strong className="text-slate-200">{customPaintProducts.length} красок</strong>
-              <span className="hidden text-slate-500 sm:inline"> · перенос между сайтом и приложением через JSON-файл</span>
+              <span className="hidden text-slate-500 sm:inline"> · общая база автоматически синхронизируется с GitHub</span>
             </div>
-            <div className="flex items-center gap-1.5">
+            {apiUser?.isAdmin && <div className="flex items-center gap-1.5">
               <button onClick={exportCustomCatalog} className="btn-secondary flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold sm:px-3"><FileDown size={13} />Сохранить базу</button>
               <button onClick={() => customCatalogFileRef.current?.click()} className="btn-secondary flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold sm:px-3"><FileUp size={13} />Загрузить базу</button>
-            </div>
+            </div>}
           </div>
           <div className="catalog-controls shrink-0">
           <section className="catalog-visual-controls mb-3 rounded-xl border border-[#2a313a] bg-[#0c1015] p-3" aria-label="Параметры предпросмотра">
@@ -1566,15 +1809,15 @@ function App() {
         </div>
       </main>
 
-      {customEntryType && <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/65 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) setCustomEntryType(''); }}>
+      {customEntryType && <div className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/65 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) closeCatalogEntryForm(); }}>
         <section role="dialog" aria-modal="true" aria-labelledby="custom-entry-title" className="panel my-auto max-h-[calc(100dvh-24px)] w-full max-w-xl overflow-y-auto p-4 shadow-2xl sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <div className="eyebrow">{customEntryType === 'color' ? 'ПОЛЬЗОВАТЕЛЬСКИЙ ОТТЕНОК' : 'ПОЛЬЗОВАТЕЛЬСКАЯ КРАСКА'}</div>
-              <h2 id="custom-entry-title" className="mt-1 font-['Manrope'] text-lg font-bold">{customEntryType === 'color' ? 'Добавить свой цвет' : 'Добавить свою краску'}</h2>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Запись сохранится в приложении на этом устройстве.</p>
+              <div className="eyebrow">НОВАЯ ЗАПИСЬ · ОБЩАЯ БАЗА</div>
+              <h2 id="custom-entry-title" className="mt-1 font-['Manrope'] text-lg font-bold">{customEntryType === 'color' ? `${editingCatalogEntry ? 'Редактировать' : 'Добавить'} цвет` : `${editingCatalogEntry ? 'Редактировать' : 'Добавить'} краску`}</h2>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">После сохранения запись сразу обновится в общей базе приватного GitHub.</p>
             </div>
-            <button type="button" onClick={() => setCustomEntryType('')} aria-label="Закрыть форму" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
+            <button type="button" onClick={closeCatalogEntryForm} aria-label="Закрыть форму" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
           </div>
           {customEntryType === 'color' ? <form onSubmit={addCustomColor} className="space-y-4">
             <label className="block text-[10px] font-semibold text-slate-400">Код / ваш артикул
@@ -1594,57 +1837,70 @@ function App() {
               <BaseBadge base={getTintingBase(customColorDraft.hex, estimateLrvFromHex(customColorDraft.hex))} />
             </div>
             <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
-              <button type="button" onClick={() => setCustomEntryType('')} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
-              <button type="submit" className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold"><Plus size={14} />Сохранить цвет</button>
+              <button type="button" onClick={closeCatalogEntryForm} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />Сохранить цвет</button>
             </div>
           </form> : <form onSubmit={addCustomPaintProduct} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-[10px] font-semibold text-slate-400">Бренд / производитель
-                <input autoFocus name="brand" required maxLength={60} placeholder="Например, Моя мастерская" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+                <input autoFocus name="brand" required maxLength={60} value={customPaintDraft.brand} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, brand: event.target.value }))} placeholder="Например, Моя мастерская" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
               </label>
               <label className="block text-[10px] font-semibold text-slate-400">Название краски
-                <input name="name" required maxLength={80} placeholder="Название продукта" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+                <input name="name" required maxLength={80} value={customPaintDraft.name} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, name: event.target.value }))} placeholder="Название продукта" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
               </label>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-[10px] font-semibold text-slate-400">Расход, м²/л
-                <input name="coverage" type="number" required min="0.1" max="100" step="0.1" defaultValue={customPaintDraft.coverage} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+                <input name="coverage" type="number" required min="0.1" max="100" step="0.1" value={customPaintDraft.coverage} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, coverage: event.target.value }))} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
               </label>
               <label className="block text-[10px] font-semibold text-slate-400">Фасовки, л через запятую
-                <input name="packages" defaultValue={customPaintDraft.packages} placeholder="0.9, 2.7, 9" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+                <input name="packages" value={customPaintDraft.packages} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, packages: event.target.value }))} placeholder="0.9, 2.7, 9" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
               </label>
             </div>
+            <label className="block text-[10px] font-semibold text-slate-400">Цена за литр, ₽ <span className="font-normal text-slate-600">· необязательно</span>
+              <input name="pricePerLiter" type="number" min="0" max="1000000" step="0.01" value={customPaintDraft.pricePerLiter} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, pricePerLiter: event.target.value }))} placeholder="Например, 890" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+            </label>
             <label className="block text-[10px] font-semibold text-slate-400">Тип / блеск
-              <input name="finish" maxLength={80} placeholder="Например, матовая" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              <input name="finish" maxLength={80} value={customPaintDraft.finish} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, finish: event.target.value }))} placeholder="Например, матовая" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
             </label>
             <label className="block text-[10px] font-semibold text-slate-400">Примечание о краске
-              <input name="purpose" maxLength={180} placeholder="Назначение или ваши заметки" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              <input name="purpose" maxLength={180} value={customPaintDraft.purpose} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, purpose: event.target.value }))} placeholder="Назначение или ваши заметки" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
             </label>
             <fieldset>
               <legend className="mb-2 text-[10px] font-semibold text-slate-400">Подходящие поверхности</legend>
               <div className="flex flex-wrap gap-2">{surfaces.map((item) => <label key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
-                <input type="checkbox" name="surface" value={item.id} checked={customPaintDraft.surfaces.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, surfaces: event.target.checked ? [...draft.surfaces, item.id] : draft.surfaces.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
+                <input type="checkbox" name="surface" value={item.id} checked={customPaintDraft.surfaces.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, surfaces: event.target.checked ? [...new Set([...draft.surfaces, item.id])] : draft.surfaces.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
                 {item.label}
               </label>)}</div>
             </fieldset>
             <label className="block text-[10px] font-semibold text-slate-400">Система баз / примечание
-              <input name="baseSystem" maxLength={120} placeholder="Например, уточнить коды баз у производителя" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              <input name="baseSystem" maxLength={120} value={customPaintDraft.baseSystem} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, baseSystem: event.target.value }))} placeholder="Например, уточнить коды баз у производителя" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
             </label>
             <fieldset>
               <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимые базы колеровки (если известны)</legend>
               <div className="flex gap-2">{['A', 'C'].map((base) => <label key={base} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
-                <input type="checkbox" name="tintBase" value={base} checked={customPaintDraft.tintBases.includes(base)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, tintBases: event.target.checked ? [...draft.tintBases, base] : draft.tintBases.filter((item) => item !== base) }))} className="accent-[var(--primary-400)]" />
+                <input type="checkbox" name="tintBase" value={base} checked={customPaintDraft.tintBases.includes(base)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, tintBases: event.target.checked ? [...new Set([...draft.tintBases, base])] : draft.tintBases.filter((item) => item !== base) }))} className="accent-[var(--primary-400)]" />
                 База {base}
               </label>)}</div>
               <p className="mt-1.5 text-[9px] leading-relaxed text-slate-500">Если не отметить базу, приложение предупредит, что её совместимость не подтверждена.</p>
             </fieldset>
             <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">
-              <button type="button" onClick={() => setCustomEntryType('')} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
-              <button type="submit" className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold"><Plus size={14} />Сохранить краску</button>
+              <button type="button" onClick={closeCatalogEntryForm} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+              <button type="submit" disabled={Boolean(catalogSavingId)} className="btn-primary flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-bold disabled:opacity-50"><Plus size={14} />Сохранить краску</button>
             </div>
           </form>}
         </section>
       </div>}
+
+      <CatalogManagementDialog
+        open={catalogManagerOpen && Boolean(apiBaseUrl)}
+        colors={customColors}
+        paints={customPaintProducts}
+        busyId={catalogSavingId}
+        onClose={() => setCatalogManagerOpen(false)}
+        onAddColor={() => openCatalogEntryForm('color')}
+        onAddPaint={() => openCatalogEntryForm('paint')}
+      />
 
       {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>
         <section role="dialog" aria-modal="true" aria-labelledby="expanded-color-title" className="relative flex min-h-[100dvh] flex-col justify-between p-5 pt-[max(20px,env(safe-area-inset-top))] sm:p-8 sm:pt-[max(32px,env(safe-area-inset-top))]">
@@ -1679,9 +1935,9 @@ function App() {
           </div>
           <div className="flex-1 space-y-5 overflow-y-auto p-5 scrollbar-thin">
             <section>
-              <div className="mb-3 flex items-center justify-between"><div className="eyebrow">КАРТОЧКИ КЛИЕНТОВ</div><span className="text-[10px] text-slate-500">{clients.length}</span></div>
-              {clients.length > 0 && <div className="mb-3 grid gap-2">
-                {clients.map((client) => {
+              <div className="mb-3 flex items-center justify-between"><div className="eyebrow">КАРТОЧКИ КЛИЕНТОВ</div><span className="text-[10px] text-slate-500">{visibleClients.length}</span></div>
+              {visibleClients.length > 0 && <div className="mb-3 grid gap-2">
+                {visibleClients.map((client) => {
                   const isActive = activeClientId === client.id;
                   return <button key={client.id} onClick={(event) => { clientCardTriggerRef.current = event.currentTarget; setActiveClientId(client.id); setClientCardId(client.id); setConfirmClientDeletion(false); }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
                     <span className="accent-surface text-[var(--primary-300)] flex h-9 w-9 shrink-0 items-center justify-center rounded-full"><UserRound size={16} /></span>
@@ -1690,13 +1946,14 @@ function App() {
                   </button>;
                 })}
               </div>}
-              <form onSubmit={addClient} className="subtle-panel space-y-3 p-3.5">
-                <div className="text-xs font-semibold">{clients.length ? 'Добавить клиента' : 'Создать карточку клиента'}</div>
+              {apiUser?.isAdmin && <form onSubmit={addClient} className="subtle-panel space-y-3 p-3.5">
+                <div className="text-xs font-semibold">{visibleClients.length ? 'Добавить клиента' : 'Создать карточку клиента'}</div>
                 <input value={clientNameInput} onChange={(event) => setClientNameInput(event.target.value)} autoComplete="name" placeholder="Имя клиента" aria-label="Имя клиента" className="field w-full rounded-lg px-3 py-2.5 text-xs" />
                 <input value={clientPhoneInput} onChange={(event) => setClientPhoneInput(event.target.value)} type="tel" autoComplete="tel" inputMode="tel" placeholder="Номер телефона" aria-label="Номер телефона" className="field w-full rounded-lg px-3 py-2.5 text-xs" />
-                <div className="text-[10px] leading-relaxed text-slate-500">В карточке и проекте сохраняются только имя и последние 4 цифры номера.</div>
+                <label className="flex items-start gap-2 text-[10px] leading-relaxed text-slate-400"><input type="checkbox" name="clientConsent" className="mt-0.5 shrink-0 accent-[var(--primary-400)]" /><span>Клиент согласен на хранение номера в приватной базе согласно <a href="https://github.com/Niks343/KolorLab1/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" className="text-[var(--primary-300)] underline underline-offset-2">уведомлению</a>.</span></label>
                 <button type="submit" className="btn-secondary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold"><Users size={14} />Сохранить клиента</button>
-              </form>
+              </form>}
+              {!apiUser && <p className="rounded-lg border border-[#2b323c] bg-[#0d1117] p-3 text-[10px] leading-relaxed text-slate-500">Вход и сохранение клиентских карточек временно отключены.</p>}
             </section>
             <section>
               <div className="mb-3 flex items-center justify-between"><div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>{activeClient && <span className="text-[10px] text-slate-500">{activeClient.name} ···· {activeClient.phoneLast4}</span>}</div>
@@ -1776,7 +2033,7 @@ function App() {
                 <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">Удалить клиента и проекты</button>
                 <button onClick={() => setConfirmClientDeletion(false)} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
               </div>
-            </div> : <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />Удалить клиента</button>}
+            </div> : apiUser?.isAdmin && <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />Удалить клиента</button>}
           </div>
         </section>
       </div>}

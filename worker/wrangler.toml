@@ -1,0 +1,12 @@
+name = "kolorlab-api"
+main = "src/index.js"
+compatibility_date = "2026-10-05"
+
+[vars]
+GITHUB_BRANCH = "main"
+ALLOWED_ORIGINS = "https://niks343.github.io,http://localhost:5173,http://localhost,https://localhost,capacitor://localhost"
+
+[[kv_namespaces]]
+binding = "AUTH_KV"
+id = "Admin"
+preview_id = "Admin"
