@@ -1,15 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowDown, ArrowDownUp, ArrowRight, Building2, Camera, Check, ChevronDown, Copy, Droplets, FileDown,
+  ArrowDown, ArrowDownUp, ArrowRight, Building2, Camera, Check, ChevronDown, Copy, Droplets, FileDown, FileUp,
   Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
   Search, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
 import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
+import {
+  createCustomCatalogDocument,
+  mergeCustomCatalog,
+  normalizeCustomColor,
+  normalizeCustomPaintProduct,
+  parseCustomCatalogDocument,
+} from './data/userCatalog.js';
 import paintProducts from './data/paintProducts.js';
 import smoothWallImage from './assets/surfaces/smooth-wall.jpg';
 import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
@@ -32,68 +42,11 @@ const colors = [
 const workspaceStorageKey = 'kolorlab.workspace.v1';
 const defaultProjectName = 'Общий проект';
 const customColorsCatalog = 'Мои цвета';
+const surfacesCatalogIds = new Set(['wall', 'plaster', 'bath', 'facade']);
 const catalogLabels = {
   'RAL Classic': 'RAL',
   'Tikkurila Symphony': 'Tikkurila',
 };
-
-function normalizeCustomColor(entry) {
-  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-color-')
-    || typeof entry.code !== 'string' || !entry.code.trim()
-    || typeof entry.name_ru !== 'string' || !entry.name_ru.trim()
-    || typeof entry.hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(entry.hex)) return null;
-  const hex = entry.hex.toUpperCase();
-  const rgb = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
-  const lrv = estimateLrvFromHex(hex);
-  return {
-    id: entry.id,
-    code: entry.code.trim(),
-    name_ru: entry.name_ru.trim(),
-    catalog: customColorsCatalog,
-    hex,
-    rgb,
-    lrv,
-    base: getTintingBase(hex, lrv),
-    applications: ['интерьер', 'фасад'],
-  };
-}
-
-function normalizeCustomPaintProduct(entry) {
-  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-paint-')
-    || typeof entry.brand !== 'string' || !entry.brand.trim()
-    || typeof entry.name !== 'string' || !entry.name.trim()
-    || !entry.coverageBySurface || typeof entry.coverageBySurface !== 'object') return null;
-  const surfaces = Object.keys(entry.coverageBySurface)
-    .filter((surfaceId) => surfacesCatalogIds.has(surfaceId));
-  if (!surfaces.length) return null;
-  const coverageBySurface = Object.fromEntries(surfaces.flatMap((surfaceId) => {
-    const value = entry.coverageBySurface[surfaceId];
-    return Array.isArray(value) && Number.isFinite(value[0]) && value[0] >= 0.1 && value[0] <= 100
-      ? [[surfaceId, [value[0], value[0]]]]
-      : [];
-  }));
-  if (!Object.keys(coverageBySurface).length) return null;
-  const packageSizesLiters = Array.isArray(entry.packageSizesLiters)
-    ? [...new Set(entry.packageSizesLiters.filter((size) => Number.isFinite(size) && size > 0 && size <= 100))].sort((a, b) => a - b)
-    : null;
-  return {
-    id: entry.id,
-    brand: entry.brand.trim(),
-    name: entry.name.trim(),
-    finish: typeof entry.finish === 'string' && entry.finish.trim() ? entry.finish.trim() : 'Не указано',
-    purpose: typeof entry.purpose === 'string' ? entry.purpose.trim() : '',
-    coverageBySurface,
-    coverageDescription: typeof entry.coverageDescription === 'string' ? entry.coverageDescription : 'Расход задан пользователем.',
-    surfaces: Object.keys(coverageBySurface),
-    baseSystem: typeof entry.baseSystem === 'string' && entry.baseSystem.trim() ? entry.baseSystem.trim() : 'Совместимость баз не указана.',
-    packageSizesLiters: packageSizesLiters?.length ? packageSizesLiters : null,
-    tintBases: Array.isArray(entry.tintBases) ? [...new Set(entry.tintBases.filter((base) => base === 'A' || base === 'C'))] : [],
-    source: '',
-    custom: true,
-  };
-}
-
-const surfacesCatalogIds = new Set(['wall', 'plaster', 'bath', 'facade']);
 
 function getCatalogLabel(catalog) {
   return catalogLabels[catalog] ?? catalog.replace(' 3D-System Plus', '');
@@ -482,6 +435,7 @@ function App() {
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
+  const customCatalogFileRef = useRef(null);
   const loadMoreRef = useRef(null);
   const analogMenuRef = useRef(null);
   const catalogPanelRef = useRef(null);
@@ -844,6 +798,89 @@ function App() {
     if (nextPreview) setPreviewSurface(nextPreview.id);
     setCustomEntryType('');
     setToast(`${product.brand} · ${product.name} добавлена в мои краски`);
+  };
+
+  const exportCustomCatalog = async () => {
+    const fileName = `KolorLab-catalog-${new Date().toISOString().slice(0, 10)}.json`;
+    const fileContents = JSON.stringify(
+      createCustomCatalogDocument(customColors, customPaintProducts, paintPricesByProduct),
+      null,
+      2,
+    );
+    if (Capacitor.isNativePlatform()) {
+      let temporaryPath = '';
+      try {
+        const savedFile = await Filesystem.writeFile({
+          path: fileName,
+          data: fileContents,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8,
+        });
+        temporaryPath = fileName;
+        const { value: canShareFile } = await Share.canShare();
+        if (!canShareFile) throw new Error('Обмен файлами недоступен на этом устройстве.');
+        await Share.share({
+          title: 'База цветов и красок KolorLab',
+          text: 'Файл пользовательской базы KolorLab. Сохраните его или передайте на другое устройство.',
+          files: [savedFile.uri],
+          dialogTitle: 'Сохранить или передать базу',
+        });
+        setToast('Файл базы подготовлен для сохранения или передачи');
+      } catch (error) {
+        console.error('Не удалось экспортировать базу KolorLab из приложения.', error);
+        setToast(error instanceof Error ? error.message : 'Не удалось экспортировать базу из приложения.');
+      } finally {
+        if (temporaryPath) {
+          try {
+            await Filesystem.deleteFile({ path: temporaryPath, directory: Directory.Cache });
+          } catch (error) {
+            console.error('Не удалось удалить временный файл базы KolorLab.', error);
+          }
+        }
+      }
+      return;
+    }
+    const blob = new Blob([fileContents], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setToast('База скачана. Импортируйте файл в приложении или на другом устройстве.');
+  };
+
+  const importCustomCatalog = async (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error('Файл слишком большой. Максимальный размер — 2 МБ.');
+      const document = JSON.parse(await file.text());
+      const imported = parseCustomCatalogDocument(document);
+      const colorMerge = mergeCustomCatalog(customColors, imported.colors);
+      const paintMerge = mergeCustomCatalog(customPaintProducts, imported.paintProducts);
+      setCustomColors(colorMerge.entries);
+      setCustomPaintProducts(paintMerge.entries);
+      setPaintPricesByProduct((prices) => ({ ...prices, ...imported.paintPricesByProduct }));
+      const added = colorMerge.added + paintMerge.added;
+      const updated = colorMerge.updated + paintMerge.updated;
+      const skipped = imported.invalidCount;
+      setToast(added || updated
+        ? `Импортировано: новых записей ${added}, обновлено ${updated}${skipped ? `, пропущено некорректных ${skipped}` : ''}`
+        : skipped
+          ? `Новых записей нет. Пропущено некорректных: ${skipped}`
+          : 'Эта база уже добавлена — изменений нет');
+    } catch (error) {
+      const message = error instanceof SyntaxError
+        ? 'Не удалось прочитать JSON. Выберите файл базы, экспортированный из KolorLab.'
+        : error instanceof Error
+          ? error.message
+          : 'Не удалось импортировать файл базы.';
+      setToast(message);
+    } finally {
+      input.value = '';
+    }
   };
 
   const sampleCameraPixel = (clientX, clientY) => {
@@ -1363,6 +1400,17 @@ function App() {
               <div className="hidden items-center gap-2 text-[10px] text-slate-500 sm:flex"><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-300" />База A</span><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-300" />База C</span></div>
               <button onClick={() => setCustomEntryType('color')} className="btn-secondary flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold sm:px-3 sm:text-xs"><Plus size={14} /><span>Добавить цвет</span></button>
               <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="catalog-close-button icon-button h-9 shrink-0 rounded-lg px-2 text-slate-400"><span className="catalog-close-label">Закрыть каталог</span><X size={18} className="catalog-close-icon" /></button>
+            </div>
+          </div>
+          <input ref={customCatalogFileRef} type="file" accept=".json,application/json" className="hidden" aria-label="Выбрать файл базы KolorLab" onChange={importCustomCatalog} />
+          <div className="my-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2a313a] bg-[#0c1015] px-3 py-2.5">
+            <div className="text-[10px] text-slate-400">
+              Ваша база: <strong className="text-slate-200">{customColors.length} цветов</strong> · <strong className="text-slate-200">{customPaintProducts.length} красок</strong>
+              <span className="hidden text-slate-500 sm:inline"> · перенос между сайтом и приложением через JSON-файл</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button onClick={exportCustomCatalog} className="btn-secondary flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold sm:px-3"><FileDown size={13} />Сохранить базу</button>
+              <button onClick={() => customCatalogFileRef.current?.click()} className="btn-secondary flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold sm:px-3"><FileUp size={13} />Загрузить базу</button>
             </div>
           </div>
           <div className="catalog-controls shrink-0">
