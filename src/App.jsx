@@ -28,7 +28,7 @@ import plasterImage from './assets/surfaces/plaster.jpg';
 import kolorlabLogo from './assets/kolorlab-logo.png';
 import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
 import PaintCatalogPanel from './components/PaintCatalogPanel.jsx';
-import { paintApplications, paintCategories, paintMaterials } from './data/paintCatalog.js';
+import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from './data/paintCatalog.js';
 
 const colors = [
   ...baseColors.map((color) => {
@@ -887,20 +887,21 @@ function App() {
         : { code: '', name: '', hex: '#71806A' });
     } else {
       const firstCoverage = Object.values(entry?.coverageBySurface ?? {})[0]?.[0] ?? 10;
+      const metadata = entry ? getPaintProductMetadata(entry) : null;
       setCustomPaintDraft(entry ? {
         brand: entry.brand,
         name: entry.name,
-        category: entry.paintCategory ?? 'interior',
-        applications: [...(entry.applications ?? [])],
-        tintable: typeof entry.tintable === 'boolean' ? entry.tintable : null,
-        compatibleMaterials: [...(entry.compatibleMaterials ?? [])],
+        category: metadata.category,
+        applications: [...metadata.applications],
+        tintable: metadata.tintable,
+        compatibleMaterials: [...metadata.compatibleMaterials],
         coverage: String(firstCoverage),
         packages: entry.packageSizesLiters?.join(', ') ?? '',
         finish: entry.finish === 'Не указано' ? '' : entry.finish,
         purpose: entry.purpose,
         baseSystem: entry.baseSystem === 'Совместимость баз не указана.' ? '' : entry.baseSystem,
         surfaces: [...entry.surfaces],
-        tintBases: [...(entry.tintBases ?? [])],
+        tintBases: [...metadata.tintBases],
         pricePerLiter: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
       } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
     }
