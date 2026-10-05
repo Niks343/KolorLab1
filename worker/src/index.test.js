@@ -120,12 +120,157 @@ test('refuses catalog access when the configured GitHub repository is public', a
     return Response.json({ private: false });
   };
   try {
-    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog', {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog?type=colors&offset=0', {
       headers: { 'CF-Connecting-IP': '192.0.2.4' },
     }), env);
     assert.equal(response.status, 503);
     assert.equal(githubCalls, 1);
     assert.deepEqual(await response.json(), { error: 'Репозиторий с базой KolorLab должен быть приватным.' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('reads the requested catalog page from the private repository', async () => {
+  const env = createEnv();
+  const paths = [];
+  let activeDirectoryReads = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    paths.push(path);
+    if (path === '/repos/owner/private-data') return Response.json({ private: true });
+    activeDirectoryReads += 1;
+    assert.equal(activeDirectoryReads, 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    activeDirectoryReads -= 1;
+    return Response.json([]);
+  };
+  try {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog?type=colors&offset=0', {
+      headers: { 'CF-Connecting-IP': '192.0.2.18' },
+    }), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { entries: [], nextOffset: null });
+    assert.deepEqual(paths, [
+      '/repos/owner/private-data',
+      '/repos/owner/private-data/contents/catalog/colors',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('retries transient GitHub transport failures while reading catalogs', async () => {
+  const env = createEnv();
+  const paths = [];
+  let colorReadFailures = 1;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    paths.push(path);
+    if (path === '/repos/owner/private-data') return Response.json({ private: true });
+    if (path.endsWith('/contents/catalog/colors') && colorReadFailures > 0) {
+      colorReadFailures -= 1;
+      throw new TypeError('Temporary network failure');
+    }
+    return Response.json([]);
+  };
+  try {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog?type=colors&offset=0', {
+      headers: { 'CF-Connecting-IP': '192.0.2.19' },
+    }), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { entries: [], nextOffset: null });
+    assert.equal(paths.filter((path) => path.endsWith('/contents/catalog/colors')).length, 2);
+    assert.equal(paths.filter((path) => path.endsWith('/contents/catalog/paints')).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('limits concurrent file reads while loading larger shared catalogs', async () => {
+  const env = createEnv();
+  const files = Array.from({ length: 13 }, (_, index) => ({
+    type: 'file',
+    name: `paint-${index}.json`,
+    path: `catalog/paints/paint-${index}.json`,
+  }));
+  let activeReads = 0;
+  let maximumConcurrentReads = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/repos/owner/private-data') return Response.json({ private: true });
+    if (path.endsWith('/contents/catalog/colors')) return Response.json([]);
+    if (path.endsWith('/contents/catalog/paints')) return Response.json(files);
+    activeReads += 1;
+    maximumConcurrentReads = Math.max(maximumConcurrentReads, activeReads);
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    activeReads -= 1;
+    const name = path.split('/').pop();
+    const id = name.replace('.json', '');
+    return Response.json({
+      content: Buffer.from(JSON.stringify({
+        id,
+        brand: 'Kolor',
+        name: id,
+        coverageBySurface: { wall: [10, 10] },
+      })).toString('base64'),
+    });
+  };
+  try {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog?type=paints&offset=0', {
+      headers: { 'CF-Connecting-IP': '192.0.2.20' },
+    }), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).entries.length, files.length);
+    assert.equal(maximumConcurrentReads, 6);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('serves catalog data in pages small enough for Worker subrequest limits', async () => {
+  const env = createEnv();
+  const files = Array.from({ length: 51 }, (_, index) => ({
+    type: 'file',
+    name: `color-${index}.json`,
+    path: `catalog/colors/color-${index}.json`,
+  }));
+  let readsThisPage = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/repos/owner/private-data') return Response.json({ private: true });
+    if (path.endsWith('/contents/catalog/colors')) {
+      readsThisPage = 0;
+      return Response.json(files);
+    }
+    if (path.endsWith('/contents/catalog/paints')) return Response.json([]);
+    readsThisPage += 1;
+    assert.ok(readsThisPage <= 20);
+    const id = path.split('/').pop().replace('.json', '');
+    return Response.json({
+      content: Buffer.from(JSON.stringify({
+        id,
+        code: id,
+        name_ru: id,
+        hex: '#AABBCC',
+      })).toString('base64'),
+    });
+  };
+  try {
+    const pages = [];
+    for (const offset of [0, 20, 40]) {
+      const response = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/catalog?type=colors&offset=${offset}`, {
+        headers: { 'CF-Connecting-IP': '192.0.2.21' },
+      }), env);
+      assert.equal(response.status, 200);
+      pages.push(await response.json());
+    }
+    assert.deepEqual(pages.map((page) => page.entries.length), [20, 20, 11]);
+    assert.deepEqual(pages.map((page) => page.nextOffset), [20, 40, null]);
   } finally {
     globalThis.fetch = originalFetch;
   }

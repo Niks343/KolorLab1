@@ -808,7 +808,26 @@ function App() {
   useEffect(() => {
     if (!apiBaseUrl) return undefined;
     let active = true;
-    apiRequest('/catalog', { token: '' })
+    const readCatalog = async (type) => {
+      const entries = [];
+      let offset = 0;
+      while (true) {
+        const page = await apiRequest(`/catalog?type=${type}&offset=${offset}`, { token: '' });
+        if (!Array.isArray(page.entries)
+          || (page.nextOffset !== null && !Number.isSafeInteger(page.nextOffset))
+          || (page.nextOffset !== null && (page.nextOffset <= offset || !page.entries.length))) {
+          throw new Error('Сервер вернул неполную страницу общей базы.');
+        }
+        entries.push(...page.entries);
+        if (page.nextOffset === null) return entries;
+        offset = page.nextOffset;
+      }
+    };
+    Promise.resolve()
+      .then(async () => ({
+        colors: await readCatalog('colors'),
+        paintProducts: await readCatalog('paints'),
+      }))
       .then(({ colors: remoteColors = [], paintProducts: remotePaints = [] }) => {
         if (!active) return;
         const deletedIds = new Set([...remoteColors, ...remotePaints]
@@ -851,7 +870,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!apiUser?.isAdmin || !remoteCatalogLoaded || !remoteCatalogIdsRef.current || legacyCatalogSyncStartedRef.current) return;
+    if (!remoteCatalogLoaded || !remoteCatalogIdsRef.current || legacyCatalogSyncStartedRef.current) return;
     const missingColors = customColors.filter((color) => !remoteCatalogIdsRef.current.has(color.id));
     const missingPaints = customPaintProducts.filter((paint) => !remoteCatalogIdsRef.current.has(paint.id));
     legacyCatalogSyncStartedRef.current = true;
@@ -880,7 +899,7 @@ function App() {
       }
     };
     syncLegacyCatalog();
-  }, [apiUser, remoteCatalogLoaded, customColors, customPaintProducts, paintPricesByProduct]);
+  }, [remoteCatalogLoaded, customColors, customPaintProducts, paintPricesByProduct]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;

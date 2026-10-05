@@ -143,14 +143,30 @@ function githubHeaders(env) {
 }
 
 async function githubRequest(env, path, init = {}) {
-  let response;
-  try {
-    response = await fetch(`https://api.github.com${path}`, {
-      ...init,
-      headers: { ...githubHeaders(env), ...init.headers },
+  const readRequest = !init.method || init.method === 'GET';
+  const maxAttempts = readRequest ? 3 : 1;
+  let response = null;
+  let transportError = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      response = await fetch(`https://api.github.com${path}`, {
+        ...init,
+        headers: { ...githubHeaders(env), ...init.headers },
+      });
+      break;
+    } catch (error) {
+      transportError = error;
+      if (attempt + 1 < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+      }
+    }
+  }
+  if (!response) {
+    console.error('GitHub API transport failed.', {
+      path,
+      attempts: maxAttempts,
+      errorName: transportError instanceof Error ? transportError.name : 'Unknown error',
     });
-  } catch (error) {
-    console.error('GitHub API transport failed.', error instanceof Error ? error.name : 'Unknown error');
     throw new HttpError(502, 'Не удалось связаться с защищённой базой GitHub.');
   }
   const responseBody = await response.text();
@@ -241,9 +257,32 @@ async function listGithubDirectory(env, path) {
   const contents = await githubRequest(env, repositoryPath(env, path), { allowNotFound: true });
   if (!contents) return [];
   if (!Array.isArray(contents)) throw new HttpError(502, 'Не удалось прочитать каталог общей базы GitHub.');
-  return Promise.all(contents
-    .filter((entry) => entry.type === 'file' && entry.name.endsWith('.json'))
-    .map(async (entry) => decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))));
+  const files = contents.filter((entry) => entry.type === 'file' && entry.name.endsWith('.json'));
+  const records = [];
+  for (let index = 0; index < files.length; index += 6) {
+    const batch = await Promise.all(files.slice(index, index + 6).map(async (entry) => (
+      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))
+    )));
+    records.push(...batch);
+  }
+  return records;
+}
+
+async function readGithubDirectoryPage(env, path, offset, limit) {
+  const contents = await githubRequest(env, repositoryPath(env, path), { allowNotFound: true });
+  if (!contents) return { records: [], nextOffset: null };
+  if (!Array.isArray(contents)) throw new HttpError(502, 'Не удалось прочитать каталог общей базы GitHub.');
+  const files = contents.filter((entry) => entry.type === 'file' && entry.name.endsWith('.json'));
+  const page = files.slice(offset, offset + limit);
+  const records = [];
+  for (let index = 0; index < page.length; index += 6) {
+    const batch = await Promise.all(page.slice(index, index + 6).map(async (entry) => (
+      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))
+    )));
+    records.push(...batch);
+  }
+  const nextOffset = offset + page.length < files.length ? offset + page.length : null;
+  return { records, nextOffset };
 }
 
 async function allowRequest(env, key, limit, ttlSeconds) {
@@ -261,12 +300,16 @@ async function limitByIp(request, env, keyPrefix, limit, ttlSeconds) {
 async function handleCatalog(request, env, pathSegments) {
   if (request.method === 'GET' && pathSegments.length === 0) {
     await limitByIp(request, env, 'catalog-read-ip', 600, 3600);
+    const url = new URL(request.url);
+    const type = url.searchParams.get('type');
+    const directory = type === 'colors' ? 'catalog/colors' : type === 'paints' ? 'catalog/paints' : null;
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    if (!directory || !Number.isSafeInteger(offset) || offset < 0) {
+      throw new HttpError(400, 'Для загрузки каталога укажите type=colors или type=paints и корректное смещение.');
+    }
     await ensurePrivateRepository(env);
-    const [colors, paintProducts] = await Promise.all([
-      listGithubDirectory(env, 'catalog/colors'),
-      listGithubDirectory(env, 'catalog/paints'),
-    ]);
-    return json({ colors, paintProducts });
+    const { records, nextOffset } = await readGithubDirectoryPage(env, directory, offset, 20);
+    return json({ entries: records, nextOffset });
   }
 
   const [kind, rawId] = pathSegments;
