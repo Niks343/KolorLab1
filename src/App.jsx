@@ -2071,7 +2071,7 @@ function App() {
               </select>
             </fieldset>
             <fieldset>
-              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимость с материалами</legend>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимые поверхности</legend>
               <div className="flex flex-wrap gap-2">{paintMaterials.map((item) => <label key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
                 <input type="checkbox" checked={customPaintDraft.compatibleMaterials.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, compatibleMaterials: event.target.checked ? [...new Set([...draft.compatibleMaterials, item.id])] : draft.compatibleMaterials.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
                 {item.label}

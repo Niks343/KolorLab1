@@ -1,7 +1,7 @@
 const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
 const allowedPaintCategories = new Set(['facade', 'interior', 'plaster', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
 const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath', 'metal']);
-const allowedPaintMaterials = new Set(['metal', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
+const allowedPaintMaterials = new Set(['mineral', 'metal', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
 
 class HttpError extends Error {
   constructor(status, message) {

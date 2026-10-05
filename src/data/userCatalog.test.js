@@ -75,6 +75,17 @@ test('preserves plaster weight, package sizes, pricing, and metal application th
     paintCategory: 'plaster',
     applications: ['interior', 'metal'],
   });
+
+  test('retains mineral surfaces as a compatible material', () => {
+    const mineralPaint = normalizeCustomPaintProduct({
+      id: 'custom-paint-mineral',
+      brand: 'KolorLab',
+      name: 'Краска для минеральных оснований',
+      coverageBySurface: { plaster: [8, 8] },
+      compatibleMaterials: ['mineral'],
+    });
+    assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral']);
+  });
   const document = createCustomCatalogDocument([], [plaster], { [plaster.id]: 85 });
   const imported = parseCustomCatalogDocument(document);
   assert.equal(imported.paintProducts[0].quantityUnit, 'kg');
