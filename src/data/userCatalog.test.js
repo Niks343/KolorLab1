@@ -84,15 +84,15 @@ test('preserves plaster weight, package sizes, pricing, and metal application th
   assert.equal(imported.paintPricesByProduct[plaster.id], 85);
 });
 
-test('retains mineral surfaces as a compatible material', () => {
+test('retains mineral surfaces and wallpaper as compatible materials', () => {
   const mineralPaint = normalizeCustomPaintProduct({
     id: 'custom-paint-mineral',
     brand: 'KolorLab',
     name: 'Краска для минеральных оснований',
     coverageBySurface: { plaster: [8, 8] },
-    compatibleMaterials: ['mineral'],
+    compatibleMaterials: ['mineral', 'wallpaper'],
   });
-  assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral']);
+  assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral', 'wallpaper']);
 });
 
 test('provides all paint types and respects explicit product compatibility settings', () => {

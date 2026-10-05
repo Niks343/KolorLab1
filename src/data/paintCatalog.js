@@ -20,6 +20,7 @@ export const paintApplications = [
 
 export const paintMaterials = [
   { id: 'mineral', label: 'Минеральные поверхности' },
+  { id: 'wallpaper', label: 'Обои' },
   { id: 'metal', label: 'Металл' },
   { id: 'plastic', label: 'Пластик' },
   { id: 'wood', label: 'Дерево' },

@@ -47,14 +47,14 @@ test('validates custom color and paint records', () => {
     applications: ['terrace', 'invalid'],
     tintable: false,
     tintBases: ['A'],
-    compatibleMaterials: ['wood', 'mineral', 'unknown'],
+    compatibleMaterials: ['wood', 'mineral', 'wallpaper', 'unknown'],
   }, 'custom-paint-one');
   assert.equal(normalizedPaint.pricePerUnit, 800);
   assert.equal(normalizedPaint.paintCategory, 'varnish');
   assert.deepEqual(normalizedPaint.applications, ['terrace']);
   assert.equal(normalizedPaint.tintable, false);
   assert.deepEqual(normalizedPaint.tintBases, []);
-  assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood', 'mineral']);
+  assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood', 'mineral', 'wallpaper']);
 });
 
 test('normalizes plaster quantity in kilograms and retains the metal application', () => {
