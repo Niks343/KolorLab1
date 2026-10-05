@@ -877,25 +877,47 @@ function App() {
     if (!missingColors.length && !missingPaints.length) return;
     const syncLegacyCatalog = async () => {
       let savedCount = 0;
-      try {
-        for (const color of missingColors) {
-          await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, { method: 'PUT', body: JSON.stringify(color) });
+      const failedEntries = [];
+      const saveLegacyEntry = async (type, entry, body) => {
+        const path = `/catalog/${type}/${encodeURIComponent(entry.id)}`;
+        let lastError;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await apiRequest(path, { method: 'PUT', body: JSON.stringify(body) });
+            return null;
+          } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : '';
+            if (/429|слишком много запросов/i.test(message)) break;
+            if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+          }
+        }
+        return lastError instanceof Error ? lastError.message : 'неизвестная ошибка';
+      };
+      for (const color of missingColors) {
+        const error = await saveLegacyEntry('colors', color, color);
+        if (error) failedEntries.push(`${color.code}: ${error}`);
+        else {
+          remoteCatalogIdsRef.current.add(color.id);
           savedCount += 1;
         }
-        for (const paint of missingPaints) {
-          await apiRequest(`/catalog/paints/${encodeURIComponent(paint.id)}`, {
-            method: 'PUT',
-            body: JSON.stringify({
-              ...paint,
-              pricePerLiter: Number.isFinite(paintPricesByProduct[paint.id]) ? paintPricesByProduct[paint.id] : null,
-            }),
-          });
+      }
+      for (const paint of missingPaints) {
+        const error = await saveLegacyEntry('paints', paint, {
+          ...paint,
+          pricePerLiter: Number.isFinite(paintPricesByProduct[paint.id]) ? paintPricesByProduct[paint.id] : null,
+        });
+        if (error) failedEntries.push(`${paint.brand} · ${paint.name}: ${error}`);
+        else {
+          remoteCatalogIdsRef.current.add(paint.id);
           savedCount += 1;
         }
-        missingColors.concat(missingPaints).forEach((entry) => remoteCatalogIdsRef.current.add(entry.id));
+      }
+      if (failedEntries.length) {
+        setToast(`В общую базу перенесено ${savedCount} записей; не удалось перенести ${failedEntries.length}. Первая ошибка: ${failedEntries[0]}. Данные остались на этом устройстве — обновите страницу, чтобы повторить.`);
+        console.error('Не удалось перенести часть локального каталога в общую базу.', failedEntries);
+      } else if (savedCount) {
         setToast(`${savedCount} старых записей перенесено в общую базу GitHub`);
-      } catch (error) {
-        setToast(`${savedCount} старых записей сохранено; перенос остановлен: ${error instanceof Error ? error.message : 'ошибка GitHub'}. Обновите страницу, чтобы повторить.`);
       }
     };
     syncLegacyCatalog();
