@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkerResponse, isAdministrator, normalizeColorRecord, normalizePaintRecord, normalizePhone } from './index.js';
+import { createWorkerResponse, normalizeColorRecord, normalizePaintRecord } from './index.js';
 
 function createEnv(overrides = {}) {
   const values = new Map();
@@ -17,14 +17,7 @@ function createEnv(overrides = {}) {
   };
 }
 
-test('normalizes common Russian phone formats into E.164', () => {
-  assert.equal(normalizePhone('8 (999) 123-45-67'), '+79991234567');
-  assert.equal(normalizePhone('+7 999 123 45 67'), '+79991234567');
-  assert.throws(() => normalizePhone('123'));
-});
-
-test('validates custom catalog records and preserves admin phone normalization for later', () => {
-  assert.equal(isAdministrator({ ADMIN_PHONES: '+7 999 123 45 67' }, '+79991234567'), true);
+test('validates custom color and paint records', () => {
   assert.deepEqual(normalizeColorRecord({
     id: 'custom-color-one',
     code: 'D-01',
@@ -82,6 +75,26 @@ test('public catalog submission creates new entries in a verified private GitHub
     assert.ok(requests.some(({ path }) => path === '/repos/owner/private-data'));
     const savedContent = saved.get('/repos/owner/private-data/contents/catalog/colors/custom-color-one.json').content;
     assert.equal(JSON.parse(Buffer.from(savedContent, 'base64').toString('utf8')).name_ru, 'Тёплый камень');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('refuses catalog access when the configured GitHub repository is public', async () => {
+  const env = createEnv();
+  let githubCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    githubCalls += 1;
+    return Response.json({ private: false });
+  };
+  try {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog', {
+      headers: { 'CF-Connecting-IP': '192.0.2.4' },
+    }), env);
+    assert.equal(response.status, 503);
+    assert.equal(githubCalls, 1);
+    assert.deepEqual(await response.json(), { error: 'Репозиторий с базой KolorLab должен быть приватным.' });
   } finally {
     globalThis.fetch = originalFetch;
   }

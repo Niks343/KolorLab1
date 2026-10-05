@@ -1,6 +1,4 @@
 const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
-const sessionLifetimeSeconds = 60 * 60 * 24 * 7;
-const encryptedClientFormat = 'kolorlab-client-v1';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -14,17 +12,6 @@ function json(data, status = 200, headers = {}) {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
   });
-}
-
-function normalizePhone(value) {
-  const digits = String(value ?? '').replace(/\D/g, '');
-  const normalized = digits.length === 10
-    ? `7${digits}`
-    : digits.length === 11 && digits.startsWith('8')
-      ? `7${digits.slice(1)}`
-      : digits;
-  if (!/^[1-9]\d{10,14}$/.test(normalized)) throw new HttpError(400, 'Введите корректный номер телефона в международном формате.');
-  return `+${normalized}`;
 }
 
 function safeId(value) {
@@ -86,177 +73,13 @@ function base64UrlEncode(bytes) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function base64UrlDecode(value) {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
 async function hmac(secret, value) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value)));
 }
 
-function safeEqual(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index += 1) mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return mismatch === 0;
-}
-
-async function phoneHash(env, phone) {
-  return base64UrlEncode(await hmac(env.SESSION_SECRET, phone));
-}
-
-function decodeHex(value) {
-  if (typeof value !== 'string' || !/^(?:[0-9a-f]{2}){32}$/i.test(value)) {
-    throw new HttpError(503, 'Сервер не настроен: ключ шифрования клиента некорректен.');
-  }
-  return Uint8Array.from(value.match(/.{2}/g), (byte) => Number.parseInt(byte, 16));
-}
-
-async function encryptClientRecord(env, record) {
-  const key = await crypto.subtle.importKey('raw', decodeHex(env.DATA_ENCRYPTION_KEY), 'AES-GCM', false, ['encrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(record));
-  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext));
-  return {
-    format: encryptedClientFormat,
-    id: record.id,
-    iv: base64UrlEncode(iv),
-    data: base64UrlEncode(encrypted),
-  };
-}
-
-async function decryptClientRecord(env, envelope) {
-  if (!envelope || envelope.format !== encryptedClientFormat || typeof envelope.id !== 'string'
-    || typeof envelope.iv !== 'string' || typeof envelope.data !== 'string') {
-    throw new HttpError(502, 'Не удалось расшифровать запись клиента из приватной базы.');
-  }
-  try {
-    const key = await crypto.subtle.importKey('raw', decodeHex(env.DATA_ENCRYPTION_KEY), 'AES-GCM', false, ['decrypt']);
-    const plaintext = await crypto.subtle.decrypt({
-      name: 'AES-GCM',
-      iv: base64UrlDecode(envelope.iv),
-    }, key, base64UrlDecode(envelope.data));
-    const record = JSON.parse(new TextDecoder().decode(plaintext));
-    if (record.id !== envelope.id || typeof record.phone !== 'string' || typeof record.name !== 'string') {
-      throw new Error('Invalid client record');
-    }
-    return record;
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    console.error('Unable to decrypt a client record.', error instanceof Error ? error.name : 'Unknown error');
-    throw new HttpError(502, 'Не удалось расшифровать запись клиента из приватной базы.');
-  }
-}
-
-async function createSession(env, user) {
-  const isPasswordAdmin = user.authType === 'admin';
-  const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify({
-    id: typeof user.phone === 'string' ? await phoneHash(env, user.phone) : user.id,
-    name: user.name,
-    phoneLast4: user.phoneLast4 ?? user.phone?.slice(-4) ?? '',
-    ...(isPasswordAdmin ? {
-      authType: 'admin',
-      adminCredentialVersion: await adminCredentialVersion(env),
-    } : {}),
-    exp: Math.floor(Date.now() / 1000) + sessionLifetimeSeconds,
-  })));
-  const signature = base64UrlEncode(await hmac(env.SESSION_SECRET, payload));
-  return `${payload}.${signature}`;
-}
-
-async function readSession(request, env) {
-  const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
-  if (!token || !env.SESSION_SECRET) throw new HttpError(401, 'Войдите по номеру телефона.');
-  const [payload, signature, extra] = token.split('.');
-  if (!payload || !signature || extra) throw new HttpError(401, 'Сеанс завершён. Войдите снова.');
-  const expected = base64UrlEncode(await hmac(env.SESSION_SECRET, payload));
-  if (!safeEqual(signature, expected)) throw new HttpError(401, 'Сеанс завершён. Войдите снова.');
-  let user;
-  try {
-    user = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload)));
-  } catch {
-    throw new HttpError(401, 'Сеанс завершён. Войдите снова.');
-  }
-  if (!Number.isFinite(user.exp) || user.exp <= Math.floor(Date.now() / 1000)
-    || typeof user.id !== 'string' || typeof user.name !== 'string'
-    || (user.phoneLast4 !== '' && !/^\d{4}$/.test(user.phoneLast4))) {
-    throw new HttpError(401, 'Сеанс завершён. Войдите снова.');
-  }
-  const passwordAdmin = user.authType === 'admin';
-  if (passwordAdmin && (typeof user.adminCredentialVersion !== 'string'
-    || !safeEqual(user.adminCredentialVersion, await adminCredentialVersion(env)))) {
-    throw new HttpError(401, 'Пароль администратора изменён. Войдите снова.');
-  }
-  const phoneAdmin = await isAdministratorHash(env, user.id);
-  return { ...user, isAdmin: passwordAdmin || phoneAdmin };
-}
-
-async function adminCredentialVersion(env) {
-  const login = typeof env.ADMIN_LOGIN === 'string' ? env.ADMIN_LOGIN.trim().toLowerCase() : '';
-  if (!/^[a-z0-9._-]{3,40}$/.test(login)) {
-    throw new HttpError(503, 'Логин администратора не настроен в Cloudflare Worker.');
-  }
-  if (typeof env.ADMIN_PASSWORD !== 'string' || env.ADMIN_PASSWORD.length < 12 || env.ADMIN_PASSWORD.length > 200) {
-    throw new HttpError(503, 'Пароль администратора не настроен: задайте не менее 12 символов.');
-  }
-  return base64UrlEncode(await hmac(env.SESSION_SECRET, `admin-session\0${login}\0${env.ADMIN_PASSWORD}`));
-}
-
-async function loginAdmin(request, env) {
-  const body = await readJson(request, 2_000);
-  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-  const ipHash = await phoneHash(env, ip);
-  await allowRequest(env, `admin-login-ip:${ipHash}`, 10, 900);
-  const login = typeof body.login === 'string' ? body.login.trim().toLowerCase().slice(0, 80) : '';
-  const password = typeof body.password === 'string' ? body.password : '';
-  if (password.length > 200) throw new HttpError(401, 'Неверный логин или пароль.');
-
-  const expected = await adminCredentialVersion(env);
-  const candidate = base64UrlEncode(await hmac(env.SESSION_SECRET, `admin-session\0${login}\0${password}`));
-  if (!safeEqual(candidate, expected)) throw new HttpError(401, 'Неверный логин или пароль.');
-
-  const user = { id: 'admin', name: 'Администратор', phoneLast4: '', authType: 'admin' };
-  return json({
-    token: await createSession(env, user),
-    user: { ...user, isAdmin: true },
-  });
-}
-
-function isAdministrator(env, phone) {
-  return String(env.ADMIN_PHONES ?? '')
-    .split(',')
-    .map((value) => {
-      try { return normalizePhone(value.trim()); } catch { return ''; }
-    })
-    .includes(phone);
-}
-
-async function isAdministratorHash(env, id) {
-  if (!env.ADMIN_PHONES) return false;
-  const allowedIds = await Promise.all(String(env.ADMIN_PHONES).split(',').map((value) => {
-    try { return phoneHash(env, normalizePhone(value.trim())); } catch { return ''; }
-  }));
-  return allowedIds.some((allowedId) => allowedId && safeEqual(allowedId, id));
-}
-
-function publicClient(record) {
-  return {
-    id: record.id,
-    name: record.name,
-    phoneLast4: record.phone.slice(-4),
-    registeredAt: record.registeredAt,
-    lastLoginAt: record.lastLoginAt,
-    updatedAt: record.updatedAt,
-  };
-}
-
-async function requireAdmin(request, env) {
-  const user = await readSession(request, env);
-  if (!user.isAdmin) throw new HttpError(403, 'Управление каталогом доступно только администратору.');
-  return user;
+async function requestHash(env, value) {
+  return base64UrlEncode(await hmac(env.SESSION_SECRET, value));
 }
 
 async function readJson(request, maxBytes = 12_000) {
@@ -281,6 +104,7 @@ function configured(env) {
 function githubHeaders(env) {
   return {
     Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    'User-Agent': 'KolorLab-Worker',
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json',
@@ -288,17 +112,34 @@ function githubHeaders(env) {
 }
 
 async function githubRequest(env, path, init = {}) {
-  const response = await fetch(`https://api.github.com${path}`, {
-    ...init,
-    headers: { ...githubHeaders(env), ...init.headers },
-  });
-  const result = await response.json().catch(() => null);
+  let response;
+  try {
+    response = await fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers: { ...githubHeaders(env), ...init.headers },
+    });
+  } catch (error) {
+    console.error('GitHub API transport failed.', error instanceof Error ? error.name : 'Unknown error');
+    throw new HttpError(502, 'Не удалось связаться с защищённой базой GitHub.');
+  }
+  const responseBody = await response.text();
+  let result;
+  try {
+    result = responseBody ? JSON.parse(responseBody) : null;
+  } catch {
+    result = null;
+  }
   if (response.status === 404 && init.allowNotFound) return null;
   if (response.status === 422 && init.createOnly) {
     throw new HttpError(409, 'Запись с таким идентификатором уже существует.');
   }
   if (!response.ok) {
-    console.error('GitHub API request failed.', response.status, result?.message);
+    console.error('GitHub API request failed.', {
+      status: response.status,
+      requestId: response.headers.get('x-github-request-id'),
+      contentType: response.headers.get('content-type'),
+      message: result?.message ?? responseBody.slice(0, 500),
+    });
     throw new HttpError(502, 'Не удалось сохранить данные в защищённой базе GitHub.');
   }
   return result;
@@ -313,34 +154,23 @@ function repositoryPath(env, path = '') {
 async function ensurePrivateRepository(env) {
   const repository = await githubRequest(env, `/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}`);
   if (repository.private !== true) {
-    throw new HttpError(503, 'Репозиторий с данными клиентов должен быть приватным.');
+    throw new HttpError(503, 'Репозиторий с базой KolorLab должен быть приватным.');
   }
 }
 
 function decodeGithubFile(file) {
+  if (typeof file?.content !== 'string') throw new HttpError(502, 'Файл общей базы GitHub имеет неподдерживаемый формат.');
   const bytes = Uint8Array.from(atob(file.content.replace(/\s/g, '')), (character) => character.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new HttpError(502, 'Не удалось прочитать запись из общей базы GitHub.');
+  }
 }
 
 async function readGithubFile(env, path) {
   const file = await githubRequest(env, repositoryPath(env, path), { allowNotFound: true });
   return file ? { sha: file.sha, value: decodeGithubFile(file) } : null;
-}
-
-async function writeGithubFile(env, path, value, message) {
-  await ensurePrivateRepository(env);
-  const existing = await readGithubFile(env, path);
-  const content = base64UrlEncode(new TextEncoder().encode(JSON.stringify(value, null, 2)))
-    .replace(/-/g, '+').replace(/_/g, '/');
-  return githubRequest(env, repositoryPath(env, path), {
-    method: 'PUT',
-    body: JSON.stringify({
-      message,
-      content: content.padEnd(Math.ceil(content.length / 4) * 4, '='),
-      branch: env.GITHUB_BRANCH || 'main',
-      ...(existing ? { sha: existing.sha } : {}),
-    }),
-  });
 }
 
 async function createGithubFile(env, path, value, message) {
@@ -360,116 +190,30 @@ async function createGithubFile(env, path, value, message) {
   });
 }
 
-async function deleteGithubFile(env, path, message) {
-  await ensurePrivateRepository(env);
-  const existing = await readGithubFile(env, path);
-  if (!existing) throw new HttpError(404, 'Запись уже удалена или не найдена.');
-  return githubRequest(env, repositoryPath(env, path), {
-    method: 'DELETE',
-    body: JSON.stringify({ message, sha: existing.sha, branch: env.GITHUB_BRANCH || 'main' }),
-  });
-}
-
 async function listGithubDirectory(env, path) {
   const contents = await githubRequest(env, repositoryPath(env, path), { allowNotFound: true });
   if (!contents) return [];
-  if (!Array.isArray(contents)) throw new HttpError(502, 'Не удалось прочитать защищённую базу GitHub.');
-  return Promise.all(contents.filter((entry) => entry.type === 'file' && entry.name.endsWith('.json')).map(async (entry) => {
-    const file = await githubRequest(env, repositoryPath(env, entry.path));
-    return decodeGithubFile(file);
-  }));
+  if (!Array.isArray(contents)) throw new HttpError(502, 'Не удалось прочитать каталог общей базы GitHub.');
+  return Promise.all(contents
+    .filter((entry) => entry.type === 'file' && entry.name.endsWith('.json'))
+    .map(async (entry) => decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))));
 }
 
 async function allowRequest(env, key, limit, ttlSeconds) {
   const count = Number(await env.AUTH_KV.get(key) ?? 0);
-  if (count >= limit) throw new HttpError(429, 'Слишком много попыток. Повторите позже.');
+  if (count >= limit) throw new HttpError(429, 'Слишком много запросов. Повторите позже.');
   await env.AUTH_KV.put(key, String(count + 1), { expirationTtl: ttlSeconds });
 }
 
-async function sendSmsCode(env, phone, code) {
-  if (!env.SMS_RU_API_ID) throw new HttpError(503, 'SMS-провайдер ещё не настроен.');
-  const params = new URLSearchParams({
-    api_id: env.SMS_RU_API_ID,
-    to: phone.slice(1),
-    msg: `Код входа в KolorLab: ${code}. Никому его не сообщайте.`,
-    json: '1',
-  });
-  let response;
-  try {
-    response = await fetch('https://sms.ru/sms/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: params,
-    });
-  } catch (error) {
-    console.error('SMS.RU transport failed.', error instanceof Error ? error.name : 'Unknown error');
-    throw new HttpError(502, 'Не удалось связаться с SMS-провайдером. Попробуйте позже.');
-  }
-  const result = await response.json().catch(() => null);
-  const delivery = result?.sms?.[phone.slice(1)];
-  if (!response.ok || result?.status !== 'OK' || delivery?.status !== 'OK') {
-    console.error('SMS.RU delivery failed.', result?.status, delivery?.status);
-    throw new HttpError(502, 'Не удалось отправить SMS-код. Проверьте номер или попробуйте позже.');
-  }
-}
-
-async function requestCode(request, env) {
-  const body = await readJson(request);
-  if (body.consent !== true) throw new HttpError(400, 'Подтвердите согласие на обработку номера телефона.');
-  const phone = normalizePhone(body.phone);
-  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
-  const addressHash = await phoneHash(env, phone);
+async function limitByIp(request, env, keyPrefix, limit, ttlSeconds) {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-  const ipHash = await phoneHash(env, ip);
-  await allowRequest(env, `sms-phone:${addressHash}`, 3, 3600);
-  await allowRequest(env, `sms-ip:${ipHash}`, 10, 3600);
-  const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
-  await sendSmsCode(env, phone, code);
-  await env.AUTH_KV.put(`otp:${addressHash}`, JSON.stringify({
-    digest: base64UrlEncode(await hmac(env.SESSION_SECRET, `${phone}:${code}`)),
-    name,
-    consentedAt: new Date().toISOString(),
-    attempts: 0,
-  }), { expirationTtl: 300 });
-  return json({ ok: true, message: 'Код отправлен. Он действует 5 минут.' });
-}
-
-async function verifyCode(request, env) {
-  const body = await readJson(request);
-  const phone = normalizePhone(body.phone);
-  if (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code)) throw new HttpError(400, 'Введите шестизначный код из SMS.');
-  const hash = await phoneHash(env, phone);
-  const key = `otp:${hash}`;
-  const stored = await env.AUTH_KV.get(key, 'json');
-  if (!stored) throw new HttpError(400, 'Код истёк. Запросите новый SMS-код.');
-  const digest = base64UrlEncode(await hmac(env.SESSION_SECRET, `${phone}:${body.code}`));
-  if (!safeEqual(digest, stored.digest)) {
-    const attempts = stored.attempts + 1;
-    if (attempts >= 5) await env.AUTH_KV.delete(key);
-    else await env.AUTH_KV.put(key, JSON.stringify({ ...stored, attempts }), { expirationTtl: 300 });
-    throw new HttpError(400, attempts >= 5 ? 'Слишком много неверных попыток. Запросите новый код.' : 'Неверный SMS-код.');
-  }
-  await env.AUTH_KV.delete(key);
-  await ensurePrivateRepository(env);
-  const path = `clients/${hash}.json`;
-  const previousEnvelope = await readGithubFile(env, path);
-  const previous = previousEnvelope ? await decryptClientRecord(env, previousEnvelope.value) : null;
-  const name = stored.name || previous?.name || 'Клиент';
-  const record = {
-    id: hash,
-    phone,
-    name,
-    registeredAt: previous?.registeredAt ?? new Date().toISOString(),
-    consentedAt: previous?.consentedAt ?? stored.consentedAt,
-    lastLoginAt: new Date().toISOString(),
-  };
-  await writeGithubFile(env, path, await encryptClientRecord(env, record), `auth: register client ${hash.slice(0, 8)}`);
-  const user = { id: hash, name, phoneLast4: phone.slice(-4) };
-  return json({ token: await createSession(env, { ...user, phone }), user: { ...user, authType: 'phone', isAdmin: isAdministrator(env, phone) } });
+  const ipHash = await requestHash(env, ip);
+  await allowRequest(env, `${keyPrefix}:${ipHash}`, limit, ttlSeconds);
 }
 
 async function handleCatalog(request, env, pathSegments) {
   if (request.method === 'GET' && pathSegments.length === 0) {
+    await limitByIp(request, env, 'catalog-read-ip', 600, 3600);
     await ensurePrivateRepository(env);
     const [colors, paintProducts] = await Promise.all([
       listGithubDirectory(env, 'catalog/colors'),
@@ -477,65 +221,21 @@ async function handleCatalog(request, env, pathSegments) {
     ]);
     return json({ colors, paintProducts });
   }
+
   const [kind, rawId] = pathSegments;
   const directories = { colors: 'colors', paints: 'paints' };
   const directory = directories[kind];
   if (!directory || pathSegments.length !== 2) throw new HttpError(404, 'Маршрут каталога не найден.');
   const id = safeId(decodeURIComponent(rawId));
-  const githubPath = `catalog/${directory}/${id}.json`;
-  if (request.method === 'POST') {
-    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-    const ipHash = await phoneHash(env, ip);
-    await allowRequest(env, `catalog-create-ip:${ipHash}`, 10, 3600);
-    const body = await readJson(request);
-    const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
-    await createGithubFile(env, githubPath, value, `catalog: add ${kind} ${id}`);
-    return json({ ok: true, record: value }, 201);
+  if (request.method !== 'POST') {
+    throw new HttpError(405, 'Сейчас разрешено только добавление новых записей. Изменение и удаление отключены.');
   }
-  throw new HttpError(405, 'Сейчас разрешено только добавление новых записей. Изменение и удаление отключены.');
-}
 
-async function handleClient(request, env, pathSegments) {
-  const user = await readSession(request, env);
-  if (pathSegments.length === 0 && request.method === 'GET') {
-    await ensurePrivateRepository(env);
-    if (user.isAdmin) {
-      const clients = await listGithubDirectory(env, 'clients');
-      const decrypted = await Promise.all(clients.map((client) => decryptClientRecord(env, client)));
-      return json({ clients: decrypted.map(publicClient) });
-    }
-    const client = await readGithubFile(env, `clients/${user.id}.json`);
-    return json({ clients: client ? [publicClient(await decryptClientRecord(env, client.value))] : [] });
-  }
-  if (pathSegments.length === 0 && request.method === 'PUT') {
-    const body = await readJson(request);
-    if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80) throw new HttpError(400, 'Укажите имя клиента (не более 80 символов).');
-    if (user.isAdmin && body.consent !== true) throw new HttpError(400, 'Подтвердите согласие клиента на хранение номера.');
-    const phone = user.isAdmin ? normalizePhone(body.phone) : '';
-    const id = user.isAdmin ? await phoneHash(env, phone) : user.id;
-    const existingEnvelope = await readGithubFile(env, `clients/${id}.json`);
-    const existing = existingEnvelope ? await decryptClientRecord(env, existingEnvelope.value) : null;
-    if (!user.isAdmin && !existing) throw new HttpError(404, 'Карточка клиента не найдена. Зарегистрируйтесь по телефону ещё раз.');
-    const savedPhone = user.isAdmin ? phone : existing.phone;
-    const record = {
-      id,
-      phone: savedPhone,
-      name: body.name.trim(),
-      registeredAt: existing?.registeredAt ?? new Date().toISOString(),
-      consentedAt: existing?.consentedAt ?? (body.consent === true ? new Date().toISOString() : null),
-      lastLoginAt: existing?.lastLoginAt ?? null,
-      updatedAt: new Date().toISOString(),
-    };
-    await writeGithubFile(env, `clients/${id}.json`, await encryptClientRecord(env, record), `clients: save ${id.slice(0, 8)}`);
-    return json({ client: publicClient(record) });
-  }
-  if (pathSegments.length === 1 && request.method === 'DELETE') {
-    if (!user.isAdmin) throw new HttpError(403, 'Удалять карточки клиентов может только администратор.');
-    const id = safeId(decodeURIComponent(pathSegments[0]));
-    await deleteGithubFile(env, `clients/${id}.json`, `clients: delete ${id.slice(0, 8)}`);
-    return json({ ok: true });
-  }
-  throw new HttpError(404, 'Маршрут клиентов не найден.');
+  await limitByIp(request, env, 'catalog-create-ip', 10, 3600);
+  const body = await readJson(request);
+  const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
+  await createGithubFile(env, `catalog/${directory}/${id}.json`, value, `catalog: add ${kind} ${id}`);
+  return json({ ok: true, record: value }, 201);
 }
 
 async function handleApi(request, env) {
@@ -555,8 +255,8 @@ export function createWorkerResponse(request, env) {
     Vary: 'Origin',
     ...(allowedOrigins.includes(origin) ? {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Max-Age': '86400',
     } : {}),
   };
@@ -580,4 +280,4 @@ export default {
   },
 };
 
-export { createSession, normalizePhone, normalizeColorRecord, normalizePaintRecord, isAdministrator };
+export { normalizeColorRecord, normalizePaintRecord };

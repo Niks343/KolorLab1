@@ -4,9 +4,11 @@ compatibility_date = "2026-10-05"
 
 [vars]
 GITHUB_BRANCH = "main"
+GITHUB_OWNER = "Niks343"
+GITHUB_REPO = "KolorLabPrivateData"
 ALLOWED_ORIGINS = "https://niks343.github.io,http://localhost:5173,http://localhost,https://localhost,capacitor://localhost"
 
 [[kv_namespaces]]
 binding = "AUTH_KV"
-id = "Admin"
-preview_id = "Admin"
+id = "186bee57439042d1887f6626494ce723"
+preview_id = "5be172b7b9b14abcbf5c8c2c0ca5573f"
