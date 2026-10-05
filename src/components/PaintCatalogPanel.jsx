@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Check, Droplets, Paintbrush, Search } from 'lucide-react';
+import { Check, Droplets, Paintbrush, Plus, Search } from 'lucide-react';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from '../data/paintCatalog.js';
 
-export default function PaintCatalogPanel({ products, selectedId, onSelect }) {
+export default function PaintCatalogPanel({ products, selectedId, onSelect, onManage }) {
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [applicationFilter, setApplicationFilter] = useState('all');
@@ -28,7 +28,7 @@ export default function PaintCatalogPanel({ products, selectedId, onSelect }) {
         <h2 className="mt-1 text-sm font-semibold">Подберите краску по типу и назначению</h2>
         <p className="mt-1 text-[10px] text-slate-500">Свойства отображаются, только если они указаны для продукта.</p>
       </div>
-      <span className="shrink-0 rounded-lg bg-[#1a2027] p-2 text-[var(--primary-300)]"><Droplets size={16} /></span>
+      <button type="button" onClick={onManage} className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold"><Plus size={13} />Добавить краску</button>
     </header>
 
     <div className="relative mb-3">

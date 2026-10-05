@@ -1,6 +1,7 @@
 export const paintCategories = [
   { id: 'facade', label: 'Фасад' },
   { id: 'interior', label: 'Интерьер' },
+  { id: 'plaster', label: 'Штукатурки' },
   { id: 'three-in-one', label: '3в1' },
   { id: 'primer', label: 'Грунты' },
   { id: 'impregnation', label: 'Пропитки' },
@@ -14,6 +15,7 @@ export const paintApplications = [
   { id: 'interior', label: 'Интерьер' },
   { id: 'terrace', label: 'Терраса' },
   { id: 'bath', label: 'Баня' },
+  { id: 'metal', label: 'Металл' },
 ];
 
 export const paintMaterials = [
@@ -26,6 +28,7 @@ export const paintMaterials = [
 ];
 
 const categoryByText = [
+  ['plaster', /штукатур/i],
   ['three-in-one', /\b3\s*(?:в|-\s*)1\b|3в1/i],
   ['primer', /грунт/i],
   ['impregnation', /пропитк|антисептик/i],
@@ -44,6 +47,7 @@ export function getPaintProductMetadata(product) {
     ...(product.surfaces?.some((surface) => ['wall', 'bath'].includes(surface)) || /интерьер|помещени/i.test(description) ? ['interior'] : []),
     ...(/террас/i.test(description) ? ['terrace'] : []),
     ...(product.surfaces?.includes('bath') || /баня|саун/i.test(description) ? ['bath'] : []),
+    ...(/металл/i.test(description) ? ['metal'] : []),
   ];
 
   return {

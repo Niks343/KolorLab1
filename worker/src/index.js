@@ -1,6 +1,6 @@
 const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
-const allowedPaintCategories = new Set(['facade', 'interior', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
-const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath']);
+const allowedPaintCategories = new Set(['facade', 'interior', 'plaster', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
+const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath', 'metal']);
 const allowedPaintMaterials = new Set(['metal', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
 
 class HttpError extends Error {
@@ -33,6 +33,7 @@ function normalizeColorRecord(value, id) {
   }
   return {
     id,
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
     code: value.code.trim(),
     name_ru: value.name_ru.trim(),
     hex: value.hex.toUpperCase(),
@@ -54,9 +55,12 @@ function normalizePaintRecord(value, id) {
     coverageBySurface[surface] = values;
   }
   const packageSizesLiters = value.packageSizesLiters == null ? null : value.packageSizesLiters;
+  const packageSizesKg = value.packageSizesKg == null ? null : value.packageSizesKg;
   if (!Object.keys(coverageBySurface).length
     || (packageSizesLiters !== null && (!Array.isArray(packageSizesLiters) || packageSizesLiters.length > 12
-      || packageSizesLiters.some((number) => !Number.isFinite(number) || number <= 0 || number > 100)))) {
+      || packageSizesLiters.some((number) => !Number.isFinite(number) || number <= 0 || number > 100)))
+    || (packageSizesKg !== null && (!Array.isArray(packageSizesKg) || packageSizesKg.length > 12
+      || packageSizesKg.some((number) => !Number.isFinite(number) || number <= 0 || number > 100)))) {
     throw new HttpError(400, 'Проверьте расход, фасовки и поверхности краски.');
   }
   const paintCategory = allowedPaintCategories.has(value.paintCategory) ? value.paintCategory : 'interior';
@@ -72,6 +76,7 @@ function normalizePaintRecord(value, id) {
     : [];
   return {
     id,
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
     brand: value.brand.trim(),
     name: value.name.trim(),
     finish: typeof value.finish === 'string' ? value.finish.trim().slice(0, 80) : '',
@@ -80,13 +85,15 @@ function normalizePaintRecord(value, id) {
     coverageDescription: typeof value.coverageDescription === 'string' ? value.coverageDescription.slice(0, 120) : '',
     baseSystem: typeof value.baseSystem === 'string' ? value.baseSystem.trim().slice(0, 120) : '',
     packageSizesLiters,
+    packageSizesKg,
+    quantityUnit: value.quantityUnit === 'kg' || paintCategory === 'plaster' ? 'kg' : 'L',
     tintBases,
     paintCategory,
     applications,
     tintable,
     compatibleMaterials,
-    pricePerLiter: Number.isFinite(value.pricePerLiter) && value.pricePerLiter >= 0 && value.pricePerLiter <= 1_000_000
-      ? value.pricePerLiter
+    pricePerUnit: Number.isFinite(value.pricePerUnit ?? value.pricePerLiter) && (value.pricePerUnit ?? value.pricePerLiter) >= 0 && (value.pricePerUnit ?? value.pricePerLiter) <= 1_000_000
+      ? value.pricePerUnit ?? value.pricePerLiter
       : null,
   };
 }
@@ -274,7 +281,10 @@ async function handleCatalog(request, env, pathSegments) {
       throw new HttpError(400, 'Для новой записи используйте идентификатор пользовательского каталога.');
     }
     const body = await readJson(request);
-    const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
+    const value = {
+      ...(kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id)),
+      createdAt: new Date().toISOString(),
+    };
     await createGithubFile(env, path, value, `catalog: add ${kind} ${id}`);
     return json({ ok: true, record: value }, 201);
   }
@@ -287,9 +297,61 @@ async function handleCatalog(request, env, pathSegments) {
     return json({ ok: true });
   }
   const body = await readJson(request);
-  const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
+  const existing = await readGithubFile(env, path);
+  const value = {
+    ...(kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id)),
+    createdAt: existing?.value?.createdAt || new Date().toISOString(),
+  };
   await updateGithubFile(env, path, value, `catalog: update ${kind} ${id}`);
   return json({ ok: true, record: value });
+}
+
+function clientSummary(record) {
+  if (!record || typeof record.id !== 'string' || typeof record.name !== 'string' || record.deleted === true) return null;
+  const phoneLast4 = typeof record.phoneLast4 === 'string'
+    ? record.phoneLast4.replace(/\D/g, '').slice(-4)
+    : String(record.phone ?? '').replace(/\D/g, '').slice(-4);
+  return { id: record.id, name: record.name, phoneLast4, createdAt: record.createdAt ?? '' };
+}
+
+async function handleClients(request, env, pathSegments) {
+  if (request.method === 'GET' && pathSegments.length === 0) {
+    await limitByIp(request, env, 'clients-read-ip', 120, 3600);
+    await ensurePrivateRepository(env);
+    const records = await listGithubDirectory(env, 'clients');
+    return json({ clients: records.map(clientSummary).filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
+  }
+  if (pathSegments.length === 0 && request.method === 'PUT') {
+    await limitByIp(request, env, 'clients-write-ip', 10, 3600);
+    const body = await readJson(request, 4_000);
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const phone = typeof body.phone === 'string' ? body.phone.replace(/\D/g, '') : '';
+    if (!name || name.length > 100 || phone.length < 10 || phone.length > 15 || body.consent !== true) {
+      throw new HttpError(400, 'Укажите имя и корректный телефон, подтвердив согласие клиента на хранение данных.');
+    }
+    await ensurePrivateRepository(env);
+    const id = `client-${await requestHash(env, phone)}`;
+    const path = `clients/${id}.json`;
+    const existing = await readGithubFile(env, path);
+    const record = {
+      id,
+      name,
+      phone,
+      phoneLast4: phone.slice(-4),
+      createdAt: existing?.value?.createdAt || new Date().toISOString(),
+    };
+    if (existing) await updateGithubFile(env, path, record, `clients: update ${id}`);
+    else await createGithubFile(env, path, record, `clients: add ${id}`);
+    return json({ client: clientSummary(record) }, existing ? 200 : 201);
+  }
+  if (pathSegments.length === 1 && request.method === 'DELETE') {
+    await limitByIp(request, env, 'clients-delete-ip', 20, 3600);
+    const id = safeId(decodeURIComponent(pathSegments[0]));
+    if (!id.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
+    await updateGithubFile(env, `clients/${id}.json`, { id, deleted: true }, `clients: delete ${id}`);
+    return json({ ok: true });
+  }
+  throw new HttpError(405, 'Для клиентов доступны просмотр, создание и удаление.');
 }
 
 async function handleApi(request, env) {
@@ -298,6 +360,7 @@ async function handleApi(request, env) {
   const segments = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
   const [resource, action, ...tail] = segments;
   if (resource === 'catalog') return handleCatalog(request, env, [action, ...tail].filter(Boolean));
+  if (resource === 'clients') return handleClients(request, env, [action, ...tail].filter(Boolean));
   throw new HttpError(404, 'Маршрут API не найден.');
 }
 

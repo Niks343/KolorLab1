@@ -26,6 +26,7 @@ test('validates custom color and paint records', () => {
     hex: '#aabbcc',
   }, 'custom-color-one'), {
     id: 'custom-color-one',
+    createdAt: '',
     code: 'D-01',
     name_ru: 'Тёплый камень',
     hex: '#AABBCC',
@@ -48,12 +49,30 @@ test('validates custom color and paint records', () => {
     tintBases: ['A'],
     compatibleMaterials: ['wood', 'unknown'],
   }, 'custom-paint-one');
-  assert.equal(normalizedPaint.pricePerLiter, 800);
+  assert.equal(normalizedPaint.pricePerUnit, 800);
   assert.equal(normalizedPaint.paintCategory, 'varnish');
   assert.deepEqual(normalizedPaint.applications, ['terrace']);
   assert.equal(normalizedPaint.tintable, false);
   assert.deepEqual(normalizedPaint.tintBases, []);
   assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood']);
+});
+
+test('normalizes plaster quantity in kilograms and retains the metal application', () => {
+  const plaster = normalizePaintRecord({
+    id: 'custom-paint-plaster',
+    brand: 'Мастерская',
+    name: 'Штукатурка',
+    coverageBySurface: { plaster: [2.5, 2.5] },
+    packageSizesKg: [5, 15, 25],
+    quantityUnit: 'kg',
+    paintCategory: 'plaster',
+    applications: ['interior', 'metal'],
+    pricePerUnit: 85,
+  }, 'custom-paint-plaster');
+  assert.equal(plaster.quantityUnit, 'kg');
+  assert.deepEqual(plaster.packageSizesKg, [5, 15, 25]);
+  assert.deepEqual(plaster.applications, ['interior', 'metal']);
+  assert.equal(plaster.pricePerUnit, 85);
 });
 
 test('public catalog submission creates new entries in a verified private GitHub repository only', async () => {
@@ -236,7 +255,6 @@ test('client phone and administrator authentication routes are disabled', async 
   for (const [path, method, body] of [
     ['/api/auth/admin-login', 'POST', { login: 'admin', password: 'secret' }],
     ['/api/auth/request-code', 'POST', { phone: '+79991234567' }],
-    ['/api/clients', 'GET', undefined],
   ]) {
     const response = await createWorkerResponse(new Request(`https://kolorlab-api.test${path}`, {
       method,
@@ -244,5 +262,70 @@ test('client phone and administrator authentication routes are disabled', async 
       ...(body ? { body: JSON.stringify(body) } : {}),
     }), env);
     assert.equal(response.status, 404);
+  }
+});
+
+test('client cards persist in the private repository, expose only the last four digits, and support deletion', async () => {
+  const env = createEnv();
+  const files = new Map();
+  const originalFetch = globalThis.fetch;
+  let writeCount = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    if (parsed.pathname === '/repos/owner/private-data/contents/clients') {
+      return Response.json([...files.entries()].map(([path, file]) => ({
+        type: 'file',
+        name: path.split('/').pop(),
+        path: path.replace('/repos/owner/private-data/contents/', ''),
+      })));
+    }
+    if (parsed.pathname.startsWith('/repos/owner/private-data/contents/clients/')) {
+      const current = files.get(parsed.pathname);
+      if (init.method === 'PUT') {
+        const body = JSON.parse(init.body);
+        const value = JSON.parse(Buffer.from(body.content, 'base64').toString('utf8'));
+        files.set(parsed.pathname, { sha: `sha-${++writeCount}`, value });
+        return Response.json({ content: { path: parsed.pathname } }, { status: current ? 200 : 201 });
+      }
+      return current
+        ? Response.json({ sha: current.sha, content: Buffer.from(JSON.stringify(current.value), 'utf8').toString('base64') })
+        : Response.json({ message: 'Not Found' }, { status: 404 });
+    }
+    assert.fail(`Unexpected request to ${parsed.href}`);
+  };
+  try {
+    const created = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.8' },
+      body: JSON.stringify({ name: 'Анна', phone: '+7 (999) 123-45-67', consent: true }),
+    }), env);
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    assert.equal(createdBody.client.name, 'Анна');
+    assert.equal(createdBody.client.phoneLast4, '4567');
+    assert.equal('phone' in createdBody.client, false);
+    const [[filePath, stored]] = [...files.entries()];
+    assert.match(filePath, /\/clients\/client-/);
+    assert.equal(stored.value.phone, '79991234567');
+
+    const list = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
+      headers: { 'CF-Connecting-IP': '192.0.2.9' },
+    }), env);
+    assert.deepEqual(await list.json(), { clients: [createdBody.client] });
+
+    const deleted = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '192.0.2.10' },
+    }), env);
+    assert.equal(deleted.status, 200);
+    assert.equal(files.get(filePath).value.deleted, true);
+
+    const afterDeletion = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
+      headers: { 'CF-Connecting-IP': '192.0.2.11' },
+    }), env);
+    assert.deepEqual(await afterDeletion.json(), { clients: [] });
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

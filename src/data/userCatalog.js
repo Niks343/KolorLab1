@@ -16,6 +16,7 @@ export function normalizeCustomColor(entry) {
   const lrv = estimateLrvFromHex(hex);
   return {
     id: entry.id,
+    createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : '',
     code: entry.code.trim(),
     name_ru: entry.name_ru.trim(),
     catalog: typeof entry.catalog === 'string' && entry.catalog.trim() ? entry.catalog : 'Мои цвета',
@@ -44,8 +45,15 @@ export function normalizeCustomPaintProduct(entry) {
     && (!Array.isArray(entry.packageSizesLiters)
       || entry.packageSizesLiters.length > 12
       || entry.packageSizesLiters.some((size) => !Number.isFinite(size) || size <= 0 || size > 100))) return null;
+  if (entry.packageSizesKg !== null && entry.packageSizesKg !== undefined
+    && (!Array.isArray(entry.packageSizesKg)
+      || entry.packageSizesKg.length > 12
+      || entry.packageSizesKg.some((size) => !Number.isFinite(size) || size <= 0 || size > 100))) return null;
   const packageSizesLiters = Array.isArray(entry.packageSizesLiters)
     ? [...new Set(entry.packageSizesLiters)].sort((a, b) => a - b)
+    : null;
+  const packageSizesKg = Array.isArray(entry.packageSizesKg)
+    ? [...new Set(entry.packageSizesKg)].sort((a, b) => a - b)
     : null;
   const paintCategory = paintCategories.some(({ id }) => id === entry.paintCategory) ? entry.paintCategory : 'interior';
   const applications = Array.isArray(entry.applications)
@@ -60,6 +68,7 @@ export function normalizeCustomPaintProduct(entry) {
     : [];
   return {
     id: entry.id,
+    createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : '',
     brand: entry.brand.trim(),
     name: entry.name.trim(),
     finish: typeof entry.finish === 'string' && entry.finish.trim() ? entry.finish.trim().slice(0, 80) : 'Не указано',
@@ -69,6 +78,8 @@ export function normalizeCustomPaintProduct(entry) {
     surfaces: Object.keys(coverageBySurface),
     baseSystem: typeof entry.baseSystem === 'string' && entry.baseSystem.trim() ? entry.baseSystem.trim().slice(0, 120) : 'Совместимость баз не указана.',
     packageSizesLiters: packageSizesLiters?.length ? packageSizesLiters : null,
+    packageSizesKg: packageSizesKg?.length ? packageSizesKg : null,
+    quantityUnit: entry.quantityUnit === 'kg' || entry.paintCategory === 'plaster' ? 'kg' : 'L',
     tintBases,
     paintCategory,
     applications,
@@ -95,12 +106,14 @@ export function createCustomCatalogDocument(customColors, customPaintProducts, p
       coverageDescription: product.coverageDescription,
       baseSystem: product.baseSystem,
       packageSizesLiters: product.packageSizesLiters,
+      packageSizesKg: product.packageSizesKg,
+      quantityUnit: product.quantityUnit,
       tintBases: product.tintBases,
       paintCategory: product.paintCategory,
       applications: product.applications,
       tintable: product.tintable,
       compatibleMaterials: product.compatibleMaterials,
-      pricePerLiter: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
+      pricePerUnit: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
     })),
   };
 }
@@ -136,10 +149,10 @@ export function parseCustomCatalogDocument(document) {
     paintProducts: paintProducts.valid,
     paintPricesByProduct: Object.fromEntries(document.paintProducts.flatMap((entry) => (
       entry && typeof entry.id === 'string'
-        && Number.isFinite(entry.pricePerLiter)
-        && entry.pricePerLiter >= 0
+        && Number.isFinite(entry.pricePerUnit ?? entry.pricePerLiter)
+        && (entry.pricePerUnit ?? entry.pricePerLiter) >= 0
         && paintProducts.valid.some((product) => product.id === entry.id)
-        ? [[entry.id, entry.pricePerLiter]]
+        ? [[entry.id, entry.pricePerUnit ?? entry.pricePerLiter]]
         : []
     ))),
     invalidCount: colors.invalid + paintProducts.invalid,

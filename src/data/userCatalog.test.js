@@ -64,9 +64,28 @@ test('normalizes built-in catalog entries as editable overlays without losing th
   assert.equal(overriddenPaint.id, 'tikkurila-harmony');
 });
 
+test('preserves plaster weight, package sizes, pricing, and metal application through portable export', () => {
+  const plaster = normalizeCustomPaintProduct({
+    id: 'custom-paint-plaster',
+    brand: 'Мастерская',
+    name: 'Декоративная штукатурка',
+    coverageBySurface: { plaster: [2.5, 2.5] },
+    packageSizesKg: [5, 15, 25],
+    quantityUnit: 'kg',
+    paintCategory: 'plaster',
+    applications: ['interior', 'metal'],
+  });
+  const document = createCustomCatalogDocument([], [plaster], { [plaster.id]: 85 });
+  const imported = parseCustomCatalogDocument(document);
+  assert.equal(imported.paintProducts[0].quantityUnit, 'kg');
+  assert.deepEqual(imported.paintProducts[0].packageSizesKg, [5, 15, 25]);
+  assert.deepEqual(imported.paintProducts[0].applications, ['interior', 'metal']);
+  assert.equal(imported.paintPricesByProduct[plaster.id], 85);
+});
+
 test('provides all paint types and respects explicit product compatibility settings', () => {
   assert.deepEqual(paintCategories.map(({ id }) => id), [
-    'facade', 'interior', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil',
+    'facade', 'interior', 'plaster', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil',
   ]);
   assert.deepEqual(getPaintProductMetadata({
     paintCategory: 'varnish',

@@ -21,7 +21,7 @@ function RecordActions({ busy, onEdit, onDelete }) {
 }
 
 export default function CatalogManagementDialog({
-  open, colors, paints, busyId, onClose, onAddColor, onAddPaint,
+  open, view, colors, paints, busyId, onClose, onAddColor, onAddPaint,
   onEditColor, onDeleteColor, onEditPaint, onDeletePaint,
 }) {
   const [colorQuery, setColorQuery] = useState('');
@@ -30,11 +30,15 @@ export default function CatalogManagementDialog({
   const [visiblePaintsCount, setVisiblePaintsCount] = useState(40);
   const filteredColors = useMemo(() => {
     const query = colorQuery.trim().toLocaleLowerCase('ru');
-    return query ? colors.filter((color) => `${color.code} ${color.name_ru} ${color.catalog}`.toLocaleLowerCase('ru').includes(query)) : colors;
+    return [...colors]
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .filter((color) => !query || `${color.code} ${color.name_ru} ${color.catalog}`.toLocaleLowerCase('ru').includes(query));
   }, [colors, colorQuery]);
   const filteredPaints = useMemo(() => {
     const query = paintQuery.trim().toLocaleLowerCase('ru');
-    return query ? paints.filter((paint) => `${paint.brand} ${paint.name} ${paint.purpose} ${paint.id}`.toLocaleLowerCase('ru').includes(query)) : paints;
+    return [...paints]
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .filter((paint) => !query || `${paint.brand} ${paint.name} ${paint.purpose} ${paint.id}`.toLocaleLowerCase('ru').includes(query));
   }, [paints, paintQuery]);
   useEffect(() => setVisibleColorsCount(40), [colorQuery]);
   useEffect(() => setVisiblePaintsCount(40), [paintQuery]);
@@ -45,13 +49,13 @@ export default function CatalogManagementDialog({
       <div className="flex items-start justify-between gap-3 border-b border-[#252b33] p-4 sm:p-5">
         <div>
           <div className="eyebrow flex items-center gap-2"><ShieldCheck size={13} className="text-emerald-300" />ОБЩАЯ БАЗА · СОХРАНЕНИЕ В GITHUB</div>
-          <h2 id="catalog-management-title" className="mt-1 font-['Manrope'] text-lg font-bold">Общая база цветов и красок</h2>
-          <p className="mt-1 text-[10px] text-slate-500">Все посетители могут добавлять, редактировать и удалять записи общей базы.</p>
+          <h2 id="catalog-management-title" className="mt-1 font-['Manrope'] text-lg font-bold">{view === 'colors' ? 'Каталог цветов' : 'Каталог красок'}</h2>
+          <p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и записи, добавленные посетителями.</p>
         </div>
         <button type="button" onClick={onClose} aria-label="Закрыть управление базой" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
-        <section>
+        {view === 'colors' && <section>
           <div className="mb-2 flex items-center justify-between gap-2">
             <div><h3 className="text-xs font-bold">Цвета <span className="text-slate-500">· {colors.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и добавленные посетителями.</p></div>
             <button type="button" onClick={onAddColor} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить цвет</button>
@@ -65,8 +69,8 @@ export default function CatalogManagementDialog({
             {!filteredColors.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">Цвета не найдены.</p>}
           </div>
           {filteredColors.length > visibleColorsCount && <button type="button" onClick={() => setVisibleColorsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visibleColorsCount} из {filteredColors.length}</button>}
-        </section>
-        <section>
+        </section>}
+        {view === 'paints' && <section>
           <div className="mb-2 flex items-center justify-between gap-2">
             <div><h3 className="text-xs font-bold">Краски <span className="text-slate-500">· {paints.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и добавленные посетителями.</p></div>
             <button type="button" onClick={onAddPaint} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить краску</button>
@@ -89,7 +93,7 @@ export default function CatalogManagementDialog({
             {!filteredPaints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">Краски не найдены.</p>}
           </div>
           {filteredPaints.length > visiblePaintsCount && <button type="button" onClick={() => setVisiblePaintsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visiblePaintsCount} из {filteredPaints.length}</button>}
-        </section>
+        </section>}
         {busyId && <p role="status" className="text-center text-[10px] text-slate-400">Синхронизируем изменения с приватным GitHub…</p>}
       </div>
     </section>
