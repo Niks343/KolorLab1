@@ -45,6 +45,25 @@ test('round-trips a portable user catalog and paint pricing', () => {
   assert.equal(imported.invalidCount, 0);
 });
 
+test('normalizes built-in catalog entries as editable overlays without losing their identity', () => {
+  const overriddenColor = normalizeCustomColor({
+    id: 'ral-9003',
+    code: 'RAL 9003',
+    name_ru: 'Изменённый белый',
+    hex: '#EEEEEE',
+    catalog: 'RAL Classic',
+  });
+  const overriddenPaint = normalizeCustomPaintProduct({
+    ...customPaint,
+    id: 'tikkurila-harmony',
+    brand: 'Tikkurila',
+  });
+
+  assert.equal(overriddenColor.id, 'ral-9003');
+  assert.equal(overriddenColor.catalog, 'RAL Classic');
+  assert.equal(overriddenPaint.id, 'tikkurila-harmony');
+});
+
 test('provides all paint types and respects explicit product compatibility settings', () => {
   assert.deepEqual(paintCategories.map(({ id }) => id), [
     'facade', 'interior', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil',

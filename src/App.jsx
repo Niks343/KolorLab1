@@ -219,6 +219,7 @@ function readWorkspace() {
       projects: [],
       customColors: [],
       customPaintProducts: [],
+      deletedCatalogIds: [],
       activeClientId: '',
       activePaintProductId: '',
       paintPricesByProduct: {},
@@ -241,11 +242,21 @@ function readWorkspace() {
     const customColors = Array.isArray(parsed.customColors)
       ? parsed.customColors.map(normalizeCustomColor).filter(Boolean)
       : [];
-    const availableColorsById = new Map([...colors, ...customColors].map((color) => [color.id, color]));
     const customPaintProducts = Array.isArray(parsed.customPaintProducts)
       ? parsed.customPaintProducts.map(normalizeCustomPaintProduct).filter(Boolean)
       : [];
-    const availablePaintProductsById = new Map([...paintProducts, ...customPaintProducts].map((product) => [product.id, product]));
+    const deletedCatalogIds = Array.isArray(parsed.deletedCatalogIds)
+      ? [...new Set(parsed.deletedCatalogIds.filter((id) => typeof id === 'string'))]
+      : [];
+    const deletedIdSet = new Set(deletedCatalogIds);
+    const availablePaintProductsById = new Map([
+      ...paintProducts.filter((product) => !deletedIdSet.has(product.id)),
+      ...customPaintProducts.filter((product) => !deletedIdSet.has(product.id)),
+    ].map((product) => [product.id, product]));
+    const availableColorsById = new Map([
+      ...colors.filter((color) => !deletedIdSet.has(color.id)),
+      ...customColors.filter((color) => !deletedIdSet.has(color.id)),
+    ].map((color) => [color.id, color]));
     const clients = parsed.clients
       .filter((client) => client && typeof client.id === 'string' && typeof client.name === 'string')
       .map((client) => ({
@@ -297,7 +308,9 @@ function readWorkspace() {
       defaultProjectName,
     ])];
     const activeProjectName = projectNames.includes(parsed.activeProjectName) ? parsed.activeProjectName : projectNames[0];
-    const selectedId = availableColorsById.has(parsed.selectedColorId) ? parsed.selectedColorId : colors[0].id;
+    const selectedId = availableColorsById.has(parsed.selectedColorId)
+      ? parsed.selectedColorId
+      : availableColorsById.keys().next().value ?? colors[0].id;
     const comparisonIds = Array.isArray(parsed.comparisonIds)
       ? [...new Set(parsed.comparisonIds.filter((id) => availableColorsById.has(id)))].slice(0, 6)
       : [];
@@ -306,10 +319,10 @@ function readWorkspace() {
     const area = Number.isFinite(parsed.area) ? Math.max(5, Math.min(150, parsed.area)) : 32;
     const layers = [1, 2, 3].includes(parsed.layers) ? parsed.layers : 2;
     const zone = zones.includes(parsed.zone) ? parsed.zone : 'Гостиная';
-    return { clients, projects, customColors, customPaintProducts, activeClientId, activePaintProductId, paintPricesByProduct, activeProjectName, projectNames, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone, error: false };
+    return { clients, projects, customColors, customPaintProducts, deletedCatalogIds, activeClientId, activePaintProductId, paintPricesByProduct, activeProjectName, projectNames, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone, error: false };
   } catch (error) {
     console.error('Не удалось загрузить локальные данные KolorLab.', error);
-    return { clients: [], projects: [], customColors: [], customPaintProducts: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, activeProjectName: defaultProjectName, projectNames: [defaultProjectName], selectedId: colors[0].id, comparisonIds: [], previewSurface: 'wall', temperature: 4000, area: 32, layers: 2, zone: 'Гостиная', error: true };
+    return { clients: [], projects: [], customColors: [], customPaintProducts: [], deletedCatalogIds: [], activeClientId: '', activePaintProductId: '', paintPricesByProduct: {}, activeProjectName: defaultProjectName, projectNames: [defaultProjectName], selectedId: colors[0].id, comparisonIds: [], previewSurface: 'wall', temperature: 4000, area: 32, layers: 2, zone: 'Гостиная', error: true };
   }
 }
 
@@ -379,6 +392,7 @@ function App() {
   const [initialWorkspace] = useState(readWorkspace);
   const [customColors, setCustomColors] = useState(initialWorkspace.customColors);
   const [customPaintProducts, setCustomPaintProducts] = useState(initialWorkspace.customPaintProducts);
+  const [deletedCatalogIds, setDeletedCatalogIds] = useState(() => new Set(initialWorkspace.deletedCatalogIds));
   const [welcomeOpen, setWelcomeOpen] = useState(true);
   const [selectedId, setSelectedId] = useState(initialWorkspace.selectedId);
   const [catalog, setCatalog] = useState(null);
@@ -471,11 +485,23 @@ function App() {
     catalogPanelRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const availableColors = useMemo(() => [...colors, ...customColors], [customColors]);
+  const availableColors = useMemo(() => {
+    const overrideIds = new Set(customColors.map((color) => color.id));
+    return [
+      ...colors.filter((color) => !overrideIds.has(color.id) && !deletedCatalogIds.has(color.id)),
+      ...customColors.filter((color) => !deletedCatalogIds.has(color.id)),
+    ];
+  }, [customColors, deletedCatalogIds]);
   const availableColorsById = useMemo(() => new Map(availableColors.map((color) => [color.id, color])), [availableColors]);
-  const availablePaintProducts = useMemo(() => [...paintProducts, ...customPaintProducts], [customPaintProducts]);
+  const availablePaintProducts = useMemo(() => {
+    const overrideIds = new Set(customPaintProducts.map((product) => product.id));
+    return [
+      ...paintProducts.filter((product) => !overrideIds.has(product.id) && !deletedCatalogIds.has(product.id)),
+      ...customPaintProducts.filter((product) => !deletedCatalogIds.has(product.id)),
+    ];
+  }, [customPaintProducts, deletedCatalogIds]);
   const availablePaintProductsById = useMemo(() => new Map(availablePaintProducts.map((product) => [product.id, product])), [availablePaintProducts]);
-  const selected = availableColorsById.get(selectedId) ?? colors[0];
+  const selected = availableColorsById.get(selectedId) ?? availableColors[0] ?? colors[0];
   const currentBase = selected.base;
   const selectedPaintProduct = availablePaintProductsById.get(paintProductId) ?? null;
   const selectedPaintBaseSystem = selectedPaintProduct?.baseSystemByTintBase?.[currentBase]
@@ -562,6 +588,7 @@ function App() {
         projects: storedProjects,
         customColors,
         customPaintProducts,
+        deletedCatalogIds: [...deletedCatalogIds],
         projectNames,
         activeProjectName,
         activeClientId,
@@ -580,7 +607,7 @@ function App() {
       console.error('Не удалось сохранить локальные данные KolorLab.', error);
       setPersistenceError(true);
     }
-  }, [clients, projects, customColors, customPaintProducts, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
+  }, [clients, projects, customColors, customPaintProducts, deletedCatalogIds, activeClientId, activeProjectName, projectNames, paintProductId, paintPricesByProduct, selectedId, comparisonIds, previewSurface, temperature, area, layers, zone]);
 
   useEffect(() => {
     if (!apiBaseUrl) return undefined;
@@ -588,11 +615,29 @@ function App() {
     apiRequest('/catalog', { token: '' })
       .then(({ colors: remoteColors = [], paintProducts: remotePaints = [] }) => {
         if (!active) return;
-        const normalizedColors = remoteColors.map(normalizeCustomColor).filter(Boolean);
-        const normalizedPaints = remotePaints.map(normalizeCustomPaintProduct).filter(Boolean);
-        remoteCatalogIdsRef.current = new Set([...normalizedColors, ...normalizedPaints].map((entry) => entry.id));
-        setCustomColors((local) => mergeCustomCatalog(local, normalizedColors).entries);
-        setCustomPaintProducts((local) => mergeCustomCatalog(local, normalizedPaints).entries);
+        const deletedIds = new Set([...remoteColors, ...remotePaints]
+          .filter((entry) => entry?.deleted === true && typeof entry.id === 'string')
+          .map((entry) => entry.id));
+        const normalizedColors = remoteColors
+          .filter((color) => color?.deleted !== true)
+          .map((color) => normalizeCustomColor({
+            ...color,
+            catalog: color.catalog ?? colors.find((entry) => entry.id === color.id)?.catalog,
+          }))
+          .filter(Boolean);
+        const normalizedPaints = remotePaints.filter((paint) => paint?.deleted !== true).map(normalizeCustomPaintProduct).filter(Boolean);
+        remoteCatalogIdsRef.current = new Set([...remoteColors, ...remotePaints]
+          .filter((entry) => typeof entry?.id === 'string')
+          .map((entry) => entry.id));
+        setDeletedCatalogIds(deletedIds);
+        setCustomColors((local) => mergeCustomCatalog(
+          local.filter((entry) => !deletedIds.has(entry.id)),
+          normalizedColors,
+        ).entries);
+        setCustomPaintProducts((local) => mergeCustomCatalog(
+          local.filter((entry) => !deletedIds.has(entry.id)),
+          normalizedPaints,
+        ).entries);
         setRemoteCatalogLoaded(true);
         setPaintPricesByProduct((prices) => ({
           ...prices,
@@ -877,6 +922,7 @@ function App() {
       code: customColorDraft.code,
       name_ru: customColorDraft.name,
       hex: customColorDraft.hex,
+      catalog: editing?.catalog,
     });
     if (!color) {
       setToast('Укажите название и код цвета, а также корректный HEX');
@@ -889,8 +935,15 @@ function App() {
         body: JSON.stringify(color),
       });
       setCustomColors((items) => editing
-        ? items.map((item) => item.id === color.id ? color : item)
+        ? items.some((item) => item.id === color.id)
+          ? items.map((item) => item.id === color.id ? color : item)
+          : [...items, color]
         : [...items, color]);
+      setDeletedCatalogIds((ids) => {
+        const next = new Set(ids);
+        next.delete(color.id);
+        return next;
+      });
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Не удалось сохранить цвет в GitHub.');
       setCatalogSavingId('');
@@ -965,8 +1018,15 @@ function App() {
         body: JSON.stringify({ ...product, pricePerLiter }),
       });
       setCustomPaintProducts((items) => editing
-        ? items.map((item) => item.id === product.id ? product : item)
+        ? items.some((item) => item.id === product.id)
+          ? items.map((item) => item.id === product.id ? product : item)
+          : [...items, product]
         : [...items, product]);
+      setDeletedCatalogIds((ids) => {
+        const next = new Set(ids);
+        next.delete(product.id);
+        return next;
+      });
       setPaintPricesByProduct((prices) => {
         const next = { ...prices };
         if (pricePerLiter === null) delete next[product.id];
@@ -1002,17 +1062,26 @@ function App() {
       });
       if (type === 'color') {
         setCustomColors((items) => items.filter((item) => item.id !== entry.id));
+        setDeletedCatalogIds((ids) => new Set([...ids, entry.id]));
         setComparisonIds((items) => items.filter((id) => id !== entry.id));
-        if (selectedId === entry.id) setSelectedId(colors[0].id);
+        if (selectedId === entry.id) {
+          const nextColor = availableColors.find((color) => color.id !== entry.id)
+            ?? colors.find((color) => color.id !== entry.id);
+          if (nextColor) setSelectedId(nextColor.id);
+        }
         if (expandedColor?.id === entry.id) setExpandedColor(null);
       } else {
         setCustomPaintProducts((items) => items.filter((item) => item.id !== entry.id));
+        setDeletedCatalogIds((ids) => new Set([...ids, entry.id]));
         setPaintPricesByProduct((prices) => {
           const next = { ...prices };
           delete next[entry.id];
           return next;
         });
-        if (paintProductId === entry.id) setPaintProductId(paintProducts[0]?.id ?? '');
+        if (paintProductId === entry.id) {
+          const nextProduct = availablePaintProducts.find((product) => product.id !== entry.id);
+          setPaintProductId(nextProduct?.id ?? '');
+        }
       }
       setToast(`${label} удалён из общей базы GitHub.`);
     } catch (error) {
@@ -1986,8 +2055,8 @@ function App() {
 
       <CatalogManagementDialog
         open={catalogManagerOpen && Boolean(apiBaseUrl)}
-        colors={customColors}
-        paints={customPaintProducts}
+        colors={availableColors}
+        paints={availablePaintProducts}
         busyId={catalogSavingId}
         onClose={() => setCatalogManagerOpen(false)}
         onAddColor={() => openCatalogEntryForm('color')}

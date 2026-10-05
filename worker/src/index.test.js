@@ -112,32 +112,32 @@ test('refuses catalog access when the configured GitHub repository is public', a
   }
 });
 
-test('public catalog edits and deletes update GitHub records', async () => {
+test('public catalog edits overlay built-in records and deletes them with tombstones', async () => {
   const env = createEnv();
   const originalFetch = globalThis.fetch;
-  let storedRecord = { id: 'custom-color-one', code: 'D-01', name_ru: 'Тёплый камень', hex: '#AABBCC' };
-  let sha = 'existing-sha';
+  const files = new Map([
+    ['/repos/owner/private-data/contents/catalog/colors/custom-color-one.json', {
+      sha: 'existing-sha',
+      value: { id: 'custom-color-one', code: 'D-01', name_ru: 'Тёплый камень', hex: '#AABBCC' },
+    }],
+  ]);
   let githubWrites = 0;
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(String(url));
     if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
-    if (parsed.pathname.endsWith('/custom-color-one.json')) {
+    if (parsed.pathname.includes('/contents/catalog/')) {
       if (init.method === 'PUT') {
         const body = JSON.parse(init.body);
-        assert.equal(body.sha, sha);
-        storedRecord = JSON.parse(Buffer.from(body.content, 'base64').toString('utf8'));
-        sha = 'updated-sha';
+        const existing = files.get(parsed.pathname);
+        assert.equal(body.sha, existing?.sha);
+        const value = JSON.parse(Buffer.from(body.content, 'base64').toString('utf8'));
+        files.set(parsed.pathname, { sha: `sha-${githubWrites + 1}`, value });
         githubWrites += 1;
-        return Response.json({ content: { path: parsed.pathname } });
+        return Response.json({ content: { path: parsed.pathname } }, { status: existing ? 200 : 201 });
       }
-      if (init.method === 'DELETE') {
-        assert.equal(JSON.parse(init.body).sha, sha);
-        storedRecord = null;
-        githubWrites += 1;
-        return Response.json({ commit: { sha: 'deleted-sha' } });
-      }
-      return storedRecord
-        ? Response.json({ sha, content: Buffer.from(JSON.stringify(storedRecord), 'utf8').toString('base64') })
+      const existing = files.get(parsed.pathname);
+      return existing
+        ? Response.json({ sha: existing.sha, content: Buffer.from(JSON.stringify(existing.value), 'utf8').toString('base64') })
         : Response.json({ message: 'Not Found' }, { status: 404 });
     }
     assert.fail(`Unexpected request to ${parsed.href}`);
@@ -156,15 +156,35 @@ test('public catalog edits and deletes update GitHub records', async () => {
       body: JSON.stringify({ id: 'custom-color-one', code: 'D-02', name_ru: 'Другой цвет', hex: '#FFFFFF' }),
     }), env);
     assert.equal(update.status, 200);
-    assert.equal(storedRecord.code, 'D-02');
+    assert.equal(files.get('/repos/owner/private-data/contents/catalog/colors/custom-color-one.json').value.code, 'D-02');
 
     const deletion = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog/colors/custom-color-one', {
       method: 'DELETE',
       headers: { 'CF-Connecting-IP': '192.0.2.5' },
     }), env);
     assert.equal(deletion.status, 200);
-    assert.equal(storedRecord, null);
-    assert.equal(githubWrites, 2);
+    assert.equal(files.get('/repos/owner/private-data/contents/catalog/colors/custom-color-one.json').value.deleted, true);
+
+    const builtInPaintUpdate = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog/paints/tikkurila-harmony', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.7' },
+      body: JSON.stringify({
+        id: 'tikkurila-harmony',
+        brand: 'Tikkurila',
+        name: 'Обновлённая Гармония',
+        coverageBySurface: { wall: [9, 9], plaster: [9, 9] },
+      }),
+    }), env);
+    assert.equal(builtInPaintUpdate.status, 200);
+    assert.equal(files.get('/repos/owner/private-data/contents/catalog/paints/tikkurila-harmony.json').value.name, 'Обновлённая Гармония');
+
+    const builtInPaintDelete = await createWorkerResponse(new Request('https://kolorlab-api.test/api/catalog/paints/tikkurila-harmony', {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '192.0.2.7' },
+    }), env);
+    assert.equal(builtInPaintDelete.status, 200);
+    assert.equal(files.get('/repos/owner/private-data/contents/catalog/paints/tikkurila-harmony.json').value.deleted, true);
+    assert.equal(githubWrites, 4);
   } finally {
     globalThis.fetch = originalFetch;
   }

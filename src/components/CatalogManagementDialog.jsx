@@ -1,4 +1,5 @@
-import { Pencil, ShieldCheck, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Pencil, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from '../data/paintCatalog.js';
 
 function RecordRow({ title, subtitle, color, actions }) {
@@ -23,6 +24,20 @@ export default function CatalogManagementDialog({
   open, colors, paints, busyId, onClose, onAddColor, onAddPaint,
   onEditColor, onDeleteColor, onEditPaint, onDeletePaint,
 }) {
+  const [colorQuery, setColorQuery] = useState('');
+  const [paintQuery, setPaintQuery] = useState('');
+  const [visibleColorsCount, setVisibleColorsCount] = useState(40);
+  const [visiblePaintsCount, setVisiblePaintsCount] = useState(40);
+  const filteredColors = useMemo(() => {
+    const query = colorQuery.trim().toLocaleLowerCase('ru');
+    return query ? colors.filter((color) => `${color.code} ${color.name_ru} ${color.catalog}`.toLocaleLowerCase('ru').includes(query)) : colors;
+  }, [colors, colorQuery]);
+  const filteredPaints = useMemo(() => {
+    const query = paintQuery.trim().toLocaleLowerCase('ru');
+    return query ? paints.filter((paint) => `${paint.brand} ${paint.name} ${paint.purpose} ${paint.id}`.toLocaleLowerCase('ru').includes(query)) : paints;
+  }, [paints, paintQuery]);
+  useEffect(() => setVisibleColorsCount(40), [colorQuery]);
+  useEffect(() => setVisiblePaintsCount(40), [paintQuery]);
   if (!open) return null;
 
   return <div className="fixed inset-0 z-[85] flex items-center justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -38,21 +53,30 @@ export default function CatalogManagementDialog({
       <div className="flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
         <section>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div><h3 className="text-xs font-bold">Цвета <span className="text-slate-500">· {colors.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Сохранение записи создаёт коммит в приватной базе.</p></div>
+            <div><h3 className="text-xs font-bold">Цвета <span className="text-slate-500">· {colors.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и добавленные посетителями.</p></div>
             <button type="button" onClick={onAddColor} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить цвет</button>
           </div>
+          <label className="relative mb-2 block">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input value={colorQuery} onChange={(event) => setColorQuery(event.target.value)} placeholder="Найти по коду, названию или каталогу" aria-label="Поиск цвета для управления" className="field w-full rounded-lg py-2 pl-9 pr-3 text-[10px]" />
+          </label>
           <div className="grid gap-2">
-            {colors.map((color) => <RecordRow key={color.id} title={`${color.code} · ${color.name_ru}`} subtitle={`${color.hex} · База ${color.base}`} color={color.hex} actions={<RecordActions busy={busyId === color.id} onEdit={() => onEditColor(color)} onDelete={() => onDeleteColor(color)} />} />)}
-            {!colors.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">В пользовательской базе пока нет цветов.</p>}
+            {filteredColors.slice(0, visibleColorsCount).map((color) => <RecordRow key={color.id} title={`${color.code} · ${color.name_ru}`} subtitle={`${color.catalog} · ${color.hex} · База ${color.base}`} color={color.hex} actions={<RecordActions busy={busyId === color.id} onEdit={() => onEditColor(color)} onDelete={() => onDeleteColor(color)} />} />)}
+            {!filteredColors.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">Цвета не найдены.</p>}
           </div>
+          {filteredColors.length > visibleColorsCount && <button type="button" onClick={() => setVisibleColorsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visibleColorsCount} из {filteredColors.length}</button>}
         </section>
         <section>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div><h3 className="text-xs font-bold">Краски <span className="text-slate-500">· {paints.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Расход, фасовки и тип базы синхронизируются автоматически.</p></div>
+            <div><h3 className="text-xs font-bold">Краски <span className="text-slate-500">· {paints.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и добавленные посетителями.</p></div>
             <button type="button" onClick={onAddPaint} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить краску</button>
           </div>
+          <label className="relative mb-2 block">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input value={paintQuery} onChange={(event) => setPaintQuery(event.target.value)} placeholder="Найти по бренду или названию" aria-label="Поиск краски для управления" className="field w-full rounded-lg py-2 pl-9 pr-3 text-[10px]" />
+          </label>
           <div className="grid gap-2">
-            {paints.map((paint) => {
+            {filteredPaints.slice(0, visiblePaintsCount).map((paint) => {
               const metadata = getPaintProductMetadata(paint);
               const category = paintCategories.find((item) => item.id === metadata.category)?.label ?? 'Краска';
               const applications = metadata.applications.map((id) => paintApplications.find((item) => item.id === id)?.label).filter(Boolean);
@@ -62,8 +86,9 @@ export default function CatalogManagementDialog({
                 : metadata.tintable === false ? 'Не колеруется' : 'Колеровка не указана';
               return <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={[category, applications.join(', '), tinting, materials.join(', '), paint.coverageDescription].filter(Boolean).join(' · ')} actions={<RecordActions busy={busyId === paint.id} onEdit={() => onEditPaint(paint)} onDelete={() => onDeletePaint(paint)} />} />;
             })}
-            {!paints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">В пользовательской базе пока нет красок.</p>}
+            {!filteredPaints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">Краски не найдены.</p>}
           </div>
+          {filteredPaints.length > visiblePaintsCount && <button type="button" onClick={() => setVisiblePaintsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visiblePaintsCount} из {filteredPaints.length}</button>}
         </section>
         {busyId && <p role="status" className="text-center text-[10px] text-slate-400">Синхронизируем изменения с приватным GitHub…</p>}
       </div>

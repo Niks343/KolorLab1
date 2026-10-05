@@ -25,17 +25,23 @@ function safeId(value) {
 }
 
 function normalizeColorRecord(value, id) {
-  if (!value || value.id !== id || !id.startsWith('custom-color-')
+  if (!value || value.id !== id
     || typeof value.code !== 'string' || !value.code.trim() || value.code.length > 40
     || typeof value.name_ru !== 'string' || !value.name_ru.trim() || value.name_ru.length > 80
     || typeof value.hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.hex)) {
     throw new HttpError(400, 'Проверьте код, название и HEX-код цвета.');
   }
-  return { id, code: value.code.trim(), name_ru: value.name_ru.trim(), hex: value.hex.toUpperCase() };
+  return {
+    id,
+    code: value.code.trim(),
+    name_ru: value.name_ru.trim(),
+    hex: value.hex.toUpperCase(),
+    ...(typeof value.catalog === 'string' && value.catalog.trim() ? { catalog: value.catalog.trim().slice(0, 80) } : {}),
+  };
 }
 
 function normalizePaintRecord(value, id) {
-  if (!value || value.id !== id || !id.startsWith('custom-paint-')
+  if (!value || value.id !== id
     || typeof value.brand !== 'string' || !value.brand.trim() || value.brand.length > 60
     || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 80
     || !value.coverageBySurface || typeof value.coverageBySurface !== 'object' || Array.isArray(value.coverageBySurface)) {
@@ -211,29 +217,14 @@ async function createGithubFile(env, path, value, message) {
 async function updateGithubFile(env, path, value, message) {
   await ensurePrivateRepository(env);
   const existing = await readGithubFile(env, path);
-  if (!existing) throw new HttpError(404, 'Запись не найдена в общей базе GitHub.');
   const content = base64UrlEncode(new TextEncoder().encode(JSON.stringify(value, null, 2)))
     .replace(/-/g, '+').replace(/_/g, '/');
   return githubRequest(env, repositoryPath(env, path), {
     method: 'PUT',
     body: JSON.stringify({
       message,
-      sha: existing.sha,
+      ...(existing ? { sha: existing.sha } : {}),
       content: content.padEnd(Math.ceil(content.length / 4) * 4, '='),
-      branch: env.GITHUB_BRANCH || 'main',
-    }),
-  });
-}
-
-async function deleteGithubFile(env, path, message) {
-  await ensurePrivateRepository(env);
-  const existing = await readGithubFile(env, path);
-  if (!existing) throw new HttpError(404, 'Запись не найдена в общей базе GitHub.');
-  return githubRequest(env, repositoryPath(env, path), {
-    method: 'DELETE',
-    body: JSON.stringify({
-      message,
-      sha: existing.sha,
       branch: env.GITHUB_BRANCH || 'main',
     }),
   });
@@ -279,6 +270,9 @@ async function handleCatalog(request, env, pathSegments) {
   const path = `catalog/${directory}/${id}.json`;
   if (request.method === 'POST') {
     await limitByIp(request, env, 'catalog-create-ip', 10, 3600);
+    if (!id.startsWith(kind === 'colors' ? 'custom-color-' : 'custom-paint-')) {
+      throw new HttpError(400, 'Для новой записи используйте идентификатор пользовательского каталога.');
+    }
     const body = await readJson(request);
     const value = kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id);
     await createGithubFile(env, path, value, `catalog: add ${kind} ${id}`);
@@ -289,7 +283,7 @@ async function handleCatalog(request, env, pathSegments) {
   }
   await limitByIp(request, env, 'catalog-edit-delete-ip', 60, 3600);
   if (request.method === 'DELETE') {
-    await deleteGithubFile(env, path, `catalog: delete ${kind} ${id}`);
+    await updateGithubFile(env, path, { id, deleted: true }, `catalog: delete ${kind} ${id}`);
     return json({ ok: true });
   }
   const body = await readJson(request);

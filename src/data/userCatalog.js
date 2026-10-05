@@ -7,7 +7,7 @@ export const userCatalogVersion = 1;
 const supportedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
 
 export function normalizeCustomColor(entry) {
-  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-color-') || entry.id.length > 200
+  if (!entry || typeof entry.id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(entry.id)
     || typeof entry.code !== 'string' || !entry.code.trim() || entry.code.length > 40
     || typeof entry.name_ru !== 'string' || !entry.name_ru.trim() || entry.name_ru.length > 80
     || typeof entry.hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(entry.hex)) return null;
@@ -18,7 +18,7 @@ export function normalizeCustomColor(entry) {
     id: entry.id,
     code: entry.code.trim(),
     name_ru: entry.name_ru.trim(),
-    catalog: 'Мои цвета',
+    catalog: typeof entry.catalog === 'string' && entry.catalog.trim() ? entry.catalog : 'Мои цвета',
     hex,
     rgb,
     lrv,
@@ -28,7 +28,7 @@ export function normalizeCustomColor(entry) {
 }
 
 export function normalizeCustomPaintProduct(entry) {
-  if (!entry || typeof entry.id !== 'string' || !entry.id.startsWith('custom-paint-') || entry.id.length > 200
+  if (!entry || typeof entry.id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(entry.id)
     || typeof entry.brand !== 'string' || !entry.brand.trim() || entry.brand.length > 60
     || typeof entry.name !== 'string' || !entry.name.trim() || entry.name.length > 80
     || !entry.coverageBySurface || typeof entry.coverageBySurface !== 'object' || Array.isArray(entry.coverageBySurface)) return null;
