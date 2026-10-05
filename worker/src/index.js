@@ -1,4 +1,7 @@
 const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
+const allowedPaintCategories = new Set(['facade', 'interior', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
+const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath']);
+const allowedPaintMaterials = new Set(['metal', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -50,6 +53,17 @@ function normalizePaintRecord(value, id) {
       || packageSizesLiters.some((number) => !Number.isFinite(number) || number <= 0 || number > 100)))) {
     throw new HttpError(400, 'Проверьте расход, фасовки и поверхности краски.');
   }
+  const paintCategory = allowedPaintCategories.has(value.paintCategory) ? value.paintCategory : 'interior';
+  const applications = Array.isArray(value.applications)
+    ? [...new Set(value.applications.filter((item) => allowedPaintApplications.has(item)))]
+    : [];
+  const tintable = typeof value.tintable === 'boolean' ? value.tintable : null;
+  const tintBases = tintable === false
+    ? []
+    : Array.isArray(value.tintBases) ? [...new Set(value.tintBases.filter((base) => base === 'A' || base === 'C'))] : [];
+  const compatibleMaterials = Array.isArray(value.compatibleMaterials)
+    ? [...new Set(value.compatibleMaterials.filter((item) => allowedPaintMaterials.has(item)))]
+    : [];
   return {
     id,
     brand: value.brand.trim(),
@@ -60,7 +74,11 @@ function normalizePaintRecord(value, id) {
     coverageDescription: typeof value.coverageDescription === 'string' ? value.coverageDescription.slice(0, 120) : '',
     baseSystem: typeof value.baseSystem === 'string' ? value.baseSystem.trim().slice(0, 120) : '',
     packageSizesLiters,
-    tintBases: Array.isArray(value.tintBases) ? [...new Set(value.tintBases.filter((base) => base === 'A' || base === 'C'))] : [],
+    tintBases,
+    paintCategory,
+    applications,
+    tintable,
+    compatibleMaterials,
     pricePerLiter: Number.isFinite(value.pricePerLiter) && value.pricePerLiter >= 0 && value.pricePerLiter <= 1_000_000
       ? value.pricePerLiter
       : null,

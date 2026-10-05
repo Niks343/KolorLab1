@@ -1,4 +1,5 @@
 import { estimateLrvFromHex, getTintingBase } from './colorBase.js';
+import { paintApplications, paintCategories, paintMaterials } from './paintCatalog.js';
 
 export const userCatalogFormat = 'kolorlab-user-catalog';
 export const userCatalogVersion = 1;
@@ -46,6 +47,17 @@ export function normalizeCustomPaintProduct(entry) {
   const packageSizesLiters = Array.isArray(entry.packageSizesLiters)
     ? [...new Set(entry.packageSizesLiters)].sort((a, b) => a - b)
     : null;
+  const paintCategory = paintCategories.some(({ id }) => id === entry.paintCategory) ? entry.paintCategory : 'interior';
+  const applications = Array.isArray(entry.applications)
+    ? [...new Set(entry.applications.filter((id) => paintApplications.some((item) => item.id === id)))]
+    : [];
+  const tintable = typeof entry.tintable === 'boolean' ? entry.tintable : null;
+  const tintBases = tintable === false
+    ? []
+    : Array.isArray(entry.tintBases) ? [...new Set(entry.tintBases.filter((base) => base === 'A' || base === 'C'))] : [];
+  const compatibleMaterials = Array.isArray(entry.compatibleMaterials)
+    ? [...new Set(entry.compatibleMaterials.filter((id) => paintMaterials.some((item) => item.id === id)))]
+    : [];
   return {
     id: entry.id,
     brand: entry.brand.trim(),
@@ -57,7 +69,11 @@ export function normalizeCustomPaintProduct(entry) {
     surfaces: Object.keys(coverageBySurface),
     baseSystem: typeof entry.baseSystem === 'string' && entry.baseSystem.trim() ? entry.baseSystem.trim().slice(0, 120) : 'Совместимость баз не указана.',
     packageSizesLiters: packageSizesLiters?.length ? packageSizesLiters : null,
-    tintBases: Array.isArray(entry.tintBases) ? [...new Set(entry.tintBases.filter((base) => base === 'A' || base === 'C'))] : [],
+    tintBases,
+    paintCategory,
+    applications,
+    tintable,
+    compatibleMaterials,
     source: '',
     custom: true,
   };
@@ -80,6 +96,10 @@ export function createCustomCatalogDocument(customColors, customPaintProducts, p
       baseSystem: product.baseSystem,
       packageSizesLiters: product.packageSizesLiters,
       tintBases: product.tintBases,
+      paintCategory: product.paintCategory,
+      applications: product.applications,
+      tintable: product.tintable,
+      compatibleMaterials: product.compatibleMaterials,
       pricePerLiter: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
     })),
   };

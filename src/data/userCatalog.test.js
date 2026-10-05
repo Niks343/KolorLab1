@@ -7,6 +7,7 @@ import {
   normalizeCustomPaintProduct,
   parseCustomCatalogDocument,
 } from './userCatalog.js';
+import { getPaintProductMetadata, paintCategories } from './paintCatalog.js';
 
 const customColor = normalizeCustomColor({
   id: 'custom-color-test-1',
@@ -20,6 +21,11 @@ const customPaint = normalizeCustomPaintProduct({
   name: 'Матовая',
   coverageBySurface: { wall: [8, 8] },
   packageSizesLiters: [0.9, 2.7, 9],
+  paintCategory: 'interior',
+  applications: ['interior', 'bath'],
+  tintable: true,
+  tintBases: ['A', 'C'],
+  compatibleMaterials: ['doors', 'windows'],
 });
 
 test('round-trips a portable user catalog and paint pricing', () => {
@@ -30,8 +36,37 @@ test('round-trips a portable user catalog and paint pricing', () => {
   assert.equal(imported.colors[0].hex, '#334455');
   assert.equal(imported.paintProducts[0].id, customPaint.id);
   assert.deepEqual(imported.paintProducts[0].packageSizesLiters, [0.9, 2.7, 9]);
+  assert.equal(imported.paintProducts[0].paintCategory, 'interior');
+  assert.deepEqual(imported.paintProducts[0].applications, ['interior', 'bath']);
+  assert.equal(imported.paintProducts[0].tintable, true);
+  assert.deepEqual(imported.paintProducts[0].tintBases, ['A', 'C']);
+  assert.deepEqual(imported.paintProducts[0].compatibleMaterials, ['doors', 'windows']);
   assert.equal(imported.paintPricesByProduct[customPaint.id], 123.5);
   assert.equal(imported.invalidCount, 0);
+});
+
+test('provides all paint types and respects explicit product compatibility settings', () => {
+  assert.deepEqual(paintCategories.map(({ id }) => id), [
+    'facade', 'interior', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil',
+  ]);
+  assert.deepEqual(getPaintProductMetadata({
+    paintCategory: 'varnish',
+    applications: ['terrace'],
+    tintable: false,
+    tintBases: ['A'],
+    compatibleMaterials: ['wood', 'metal'],
+  }), {
+    category: 'varnish',
+    applications: ['terrace'],
+    tintable: false,
+    tintBases: [],
+    compatibleMaterials: ['wood', 'metal'],
+  });
+  assert.deepEqual(getPaintProductMetadata({
+    name: 'Силиконовая краска',
+    purpose: 'Для фасадов и минеральных оснований.',
+    surfaces: ['plaster', 'facade'],
+  }).applications, ['facade']);
 });
 
 test('merges imported entries by stable IDs without creating duplicates', () => {

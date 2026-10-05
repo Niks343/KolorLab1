@@ -1,4 +1,5 @@
 import { ShieldCheck, X } from 'lucide-react';
+import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from '../data/paintCatalog.js';
 
 function RecordRow({ title, subtitle, color }) {
   return <article className="flex min-w-0 items-center gap-3 rounded-xl border border-[#2b323c] bg-[#0d1117] p-3">
@@ -40,7 +41,16 @@ export default function CatalogManagementDialog({ open, colors, paints, busyId, 
             <button type="button" onClick={onAddPaint} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить краску</button>
           </div>
           <div className="grid gap-2">
-            {paints.map((paint) => <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={`${paint.finish} · ${paint.coverageDescription}`} />)}
+            {paints.map((paint) => {
+              const metadata = getPaintProductMetadata(paint);
+              const category = paintCategories.find((item) => item.id === metadata.category)?.label ?? 'Краска';
+              const applications = metadata.applications.map((id) => paintApplications.find((item) => item.id === id)?.label).filter(Boolean);
+              const materials = metadata.compatibleMaterials.map((id) => paintMaterials.find((item) => item.id === id)?.label).filter(Boolean);
+              const tinting = metadata.tintable === true
+                ? `Колеруется${metadata.tintBases.length ? ` · база ${metadata.tintBases.join('/')}` : ''}`
+                : metadata.tintable === false ? 'Не колеруется' : 'Колеровка не указана';
+              return <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={[category, applications.join(', '), tinting, materials.join(', '), paint.coverageDescription].filter(Boolean).join(' · ')} />;
+            })}
             {!paints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">В пользовательской базе пока нет красок.</p>}
           </div>
         </section>

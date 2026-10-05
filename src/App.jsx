@@ -27,6 +27,8 @@ import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
 import plasterImage from './assets/surfaces/plaster.jpg';
 import kolorlabLogo from './assets/kolorlab-logo.png';
 import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
+import PaintCatalogPanel from './components/PaintCatalogPanel.jsx';
+import { paintApplications, paintCategories, paintMaterials } from './data/paintCatalog.js';
 
 const colors = [
   ...baseColors.map((color) => {
@@ -441,7 +443,7 @@ function App() {
   const [customEntryType, setCustomEntryType] = useState('');
   const [editingCatalogEntry, setEditingCatalogEntry] = useState(null);
   const [customColorDraft, setCustomColorDraft] = useState({ code: '', name: '', hex: '#71806A' });
-  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
+  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
@@ -455,7 +457,6 @@ function App() {
   const closeCatalog = () => {
     setCatalogOpen(false);
     setCatalogShowTop(false);
-    setActiveMobileTab((tab) => tab === 'Цвет' ? 'Визуализация' : tab);
   };
   const dismissWelcome = () => {
     setWelcomeOpen(false);
@@ -847,6 +848,10 @@ function App() {
       setCustomPaintDraft(entry ? {
         brand: entry.brand,
         name: entry.name,
+        category: entry.paintCategory ?? 'interior',
+        applications: [...(entry.applications ?? [])],
+        tintable: typeof entry.tintable === 'boolean' ? entry.tintable : null,
+        compatibleMaterials: [...(entry.compatibleMaterials ?? [])],
         coverage: String(firstCoverage),
         packages: entry.packageSizesLiters?.join(', ') ?? '',
         finish: entry.finish === 'Не указано' ? '' : entry.finish,
@@ -855,7 +860,7 @@ function App() {
         surfaces: [...entry.surfaces],
         tintBases: [...(entry.tintBases ?? [])],
         pricePerLiter: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
-      } : { brand: '', name: '', coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
+      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerLiter: '' });
     }
     setCatalogManagerOpen(false);
     setCustomEntryType(type);
@@ -899,7 +904,7 @@ function App() {
     setApplicationFilter('all');
     setFamilyFilter('Все семейства');
     setLightnessFilter('Любая светлота');
-    setActiveMobileTab('Цвет');
+    setActiveMobileTab('Визуализация');
     setCatalogOpen(true);
     setCatalogManagerOpen(true);
     setToast(`${color.code} добавлен в общую базу GitHub`);
@@ -928,7 +933,7 @@ function App() {
       setToast('Укажите фасовки числами через запятую, например: 0.9, 2.7, 9');
       return;
     }
-    const tintBases = customPaintDraft.tintBases.filter((base) => base === 'A' || base === 'C');
+    const tintBases = customPaintDraft.tintable === false ? [] : customPaintDraft.tintBases.filter((base) => base === 'A' || base === 'C');
     const product = normalizeCustomPaintProduct({
       id: `custom-paint-${globalThis.crypto.randomUUID()}`,
       brand,
@@ -940,6 +945,10 @@ function App() {
       baseSystem: customPaintDraft.baseSystem,
       packageSizesLiters: packageSizes,
       tintBases,
+      paintCategory: customPaintDraft.category,
+      applications: customPaintDraft.applications,
+      tintable: customPaintDraft.tintable,
+      compatibleMaterials: customPaintDraft.compatibleMaterials,
     });
     if (!product) {
       setToast('Не удалось проверить параметры краски. Проверьте поля и попробуйте снова.');
@@ -971,6 +980,7 @@ function App() {
     setCustomEntryType('');
     setEditingCatalogEntry(null);
     setCatalogManagerOpen(true);
+    setActiveMobileTab('Краски');
     setToast(`${product.brand} · ${product.name} добавлена в общую базу GitHub`);
   };
 
@@ -1374,6 +1384,7 @@ function App() {
         <div className="hidden items-center gap-2 rounded-full border border-[#2b323c] bg-[#11151b] px-3 py-1.5 text-[11px] text-slate-400 md:flex"><span className="h-1.5 w-1.5 rounded-full bg-[var(--primary-400)]" />Цифровой подбор цвета <span className="ml-1 text-slate-600">·</span> Москва</div>
         <div className="flex items-center gap-2">
           <button onClick={() => setCatalogOpen(true)} aria-expanded={catalogOpen} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:hidden"><Paintbrush size={15} /><span className="hidden sm:inline">Каталог цветов</span><span className="sm:hidden">Каталог</span></button>
+          <button onClick={() => setActiveMobileTab('Краски')} className="btn-secondary hidden items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:flex"><Droplets size={15} /><span>Краски</span></button>
           {apiBaseUrl && <button onClick={() => setCatalogManagerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShieldCheck size={15} /><span>Добавить в базу</span></button>}
           <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShoppingBag size={15} /><span className="hidden sm:inline">Мой проект</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
         </div>
@@ -1386,7 +1397,7 @@ function App() {
         </div>
 
         <nav className="mobile-tabbar -mx-4 mb-4 flex gap-1 border-y border-[#222831] px-4 py-2 xl:hidden">
-          {['Визуализация', 'Расчёт и подбор', 'Цвет'].map((tab) => <button key={tab} onClick={() => { setActiveMobileTab(tab); if (tab === 'Цвет') setCatalogOpen(true); }} className={`flex-1 rounded-lg py-2 text-[11px] font-semibold ${activeMobileTab === tab ? 'accent-surface text-[var(--primary-100)]' : 'text-slate-500'}`}>{tab}</button>)}
+          {['Визуализация', 'Расчёт и подбор', 'Краски'].map((tab) => <button key={tab} onClick={() => setActiveMobileTab(tab)} className={`flex-1 rounded-lg py-2 text-[11px] font-semibold ${activeMobileTab === tab ? 'accent-surface text-[var(--primary-100)]' : 'text-slate-500'}`}>{tab}</button>)}
         </nav>
 
         <div className="dashboard-workspace grid items-stretch gap-5">
@@ -1477,8 +1488,8 @@ function App() {
 
           </div>
 
-          <div className={`dashboard-column dashboard-column-center ${activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`}>
-            <section className="dashboard-calculator panel p-4 sm:p-5">
+          <div className={`dashboard-column dashboard-column-center ${activeMobileTab === 'Краски' ? 'dashboard-paint-view' : ''} ${!['Расчёт и подбор', 'Краски'].includes(activeMobileTab) ? 'hidden xl:flex' : ''}`}>
+            <section className={`dashboard-calculator panel p-4 sm:p-5 ${activeMobileTab === 'Краски' ? 'hidden' : ''}`}>
               <div className="mb-4 flex items-start justify-between"><div><div className="eyebrow">РАСЧЁТ КРАСКИ</div><h2 className="mt-1 text-sm font-semibold">Сколько понадобится?</h2></div><div className="rounded-lg bg-[#1a2027] p-2 text-[var(--primary-300)]"><Droplets size={16} /></div></div>
               <div className="mb-4 flex items-end justify-between"><label htmlFor="area" className="text-xs text-slate-400">Площадь окрашивания</label><div className="text-right"><span className="font-['Manrope'] text-xl font-bold">{area}</span><span className="ml-1 text-xs text-slate-500">м²</span></div></div>
               <input id="area" type="range" min="5" max="150" value={area} onChange={(event) => setArea(Number(event.target.value))} style={{ '--range-progress': `${((area - 5) / 145) * 100}%` }} className="range-slider mb-1 w-full" />
@@ -1579,7 +1590,7 @@ function App() {
                 <button onClick={addToProject} className="btn-primary flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold"><Plus size={15} />В проект</button>
               </div>
             </section>
-            <section className={`dashboard-palettes panel min-h-0 p-4 sm:p-5 ${activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`} aria-label="Карточка подбора цветов">
+            <section className={`dashboard-palettes panel min-h-0 p-4 sm:p-5 ${activeMobileTab === 'Краски' ? 'hidden' : activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`} aria-label="Карточка подбора цветов">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
                   <div className="eyebrow">ВАША КОЛЛЕКЦИЯ</div>
@@ -1626,6 +1637,22 @@ function App() {
                 </div>
               </div>
             </section>
+            {activeMobileTab === 'Краски' && <PaintCatalogPanel
+              products={availablePaintProducts}
+              selectedId={paintProductId}
+              onSelect={(product) => {
+                setPaintProductId(product.id);
+                if (!product.surfaces.includes(surface)) setSurface(product.surfaces[0]);
+                const preview = visualSurfaces.find((item) => item.id === previewSurface);
+                if (!preview || !product.surfaces.includes(preview.calculatorSurface)) {
+                  const nextPreview = visualSurfaces.find((item) => product.surfaces.includes(item.calculatorSurface));
+                  if (nextPreview) {
+                    setPreviewSurface(nextPreview.id);
+                    setSurface(nextPreview.calculatorSurface);
+                  }
+                }
+              }}
+            />}
           </div>
         </div>
 
@@ -1849,6 +1876,31 @@ function App() {
                 <input name="name" required maxLength={80} value={customPaintDraft.name} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, name: event.target.value }))} placeholder="Название продукта" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
               </label>
             </div>
+            <label className="block text-[10px] font-semibold text-slate-400">Тип краски
+              <select value={customPaintDraft.category} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, category: event.target.value }))} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs">
+                {paintCategories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}
+              </select>
+            </label>
+            <fieldset>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Область применения</legend>
+              <div className="flex flex-wrap gap-2">{paintApplications.map((item) => <label key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
+                <input type="checkbox" checked={customPaintDraft.applications.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, applications: event.target.checked ? [...new Set([...draft.applications, item.id])] : draft.applications.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
+                {item.label}
+              </label>)}</div>
+            </fieldset>
+            <fieldset>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Колеровка</legend>
+              <select aria-label="Колеруется ли краска" value={customPaintDraft.tintable === true ? 'yes' : customPaintDraft.tintable === false ? 'no' : 'unknown'} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, tintable: event.target.value === 'yes' ? true : event.target.value === 'no' ? false : null, tintBases: event.target.value === 'no' ? [] : draft.tintBases }))} className="field w-full rounded-lg px-3 py-2.5 text-xs">
+                <option value="unknown">Не указано</option><option value="yes">Колеруется</option><option value="no">Не колеруется</option>
+              </select>
+            </fieldset>
+            <fieldset>
+              <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимость с материалами</legend>
+              <div className="flex flex-wrap gap-2">{paintMaterials.map((item) => <label key={item.id} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
+                <input type="checkbox" checked={customPaintDraft.compatibleMaterials.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, compatibleMaterials: event.target.checked ? [...new Set([...draft.compatibleMaterials, item.id])] : draft.compatibleMaterials.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
+                {item.label}
+              </label>)}</div>
+            </fieldset>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-[10px] font-semibold text-slate-400">Расход, м²/л
                 <input name="coverage" type="number" required min="0.1" max="100" step="0.1" value={customPaintDraft.coverage} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, coverage: event.target.value }))} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
@@ -1878,10 +1930,12 @@ function App() {
             </label>
             <fieldset>
               <legend className="mb-2 text-[10px] font-semibold text-slate-400">Совместимые базы колеровки (если известны)</legend>
-              <div className="flex gap-2">{['A', 'C'].map((base) => <label key={base} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
+              {customPaintDraft.tintable === false
+                ? <p className="text-[9px] text-slate-500">Для неколеруемой краски базы не применяются.</p>
+                : <div className="flex gap-2">{['A', 'C'].map((base) => <label key={base} className="flex items-center gap-1.5 rounded-lg border border-[#2b323c] bg-[#0c1015] px-2.5 py-2 text-[10px] text-slate-300">
                 <input type="checkbox" name="tintBase" value={base} checked={customPaintDraft.tintBases.includes(base)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, tintBases: event.target.checked ? [...new Set([...draft.tintBases, base])] : draft.tintBases.filter((item) => item !== base) }))} className="accent-[var(--primary-400)]" />
                 База {base}
-              </label>)}</div>
+              </label>)}</div>}
               <p className="mt-1.5 text-[9px] leading-relaxed text-slate-500">Если не отметить базу, приложение предупредит, что её совместимость не подтверждена.</p>
             </fieldset>
             <div className="flex justify-end gap-2 border-t border-[#252b33] pt-4">

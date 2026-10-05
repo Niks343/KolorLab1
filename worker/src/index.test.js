@@ -35,13 +35,24 @@ test('validates custom color and paint records', () => {
     name_ru: 'Тёплый камень',
     hex: '#AABBCC',
   }, 'custom-color-one'), { status: 400 });
-  assert.equal(normalizePaintRecord({
+  const normalizedPaint = normalizePaintRecord({
     id: 'custom-paint-one',
     brand: 'Kolor',
     name: 'Матовая',
     coverageBySurface: { wall: [10, 10] },
     pricePerLiter: 800,
-  }, 'custom-paint-one').pricePerLiter, 800);
+    paintCategory: 'varnish',
+    applications: ['terrace', 'invalid'],
+    tintable: false,
+    tintBases: ['A'],
+    compatibleMaterials: ['wood', 'unknown'],
+  }, 'custom-paint-one');
+  assert.equal(normalizedPaint.pricePerLiter, 800);
+  assert.equal(normalizedPaint.paintCategory, 'varnish');
+  assert.deepEqual(normalizedPaint.applications, ['terrace']);
+  assert.equal(normalizedPaint.tintable, false);
+  assert.deepEqual(normalizedPaint.tintBases, []);
+  assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood']);
 });
 
 test('public catalog submission creates new entries in a verified private GitHub repository only', async () => {

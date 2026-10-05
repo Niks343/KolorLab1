@@ -377,6 +377,14 @@ button { cursor: pointer; }
   }
   .dashboard-column-center > .dashboard-calculator,
   .dashboard-column-center > .dashboard-palettes { min-width: 0; }
+  .dashboard-column-center.dashboard-paint-view {
+    display: block;
+    grid-column: 1 / 3;
+    overflow: visible;
+  }
+  .dashboard-column-center.dashboard-paint-view > .dashboard-calculator,
+  .dashboard-column-center.dashboard-paint-view > .dashboard-palettes { display: none; }
+  .dashboard-paint-catalog { min-height: 100%; }
   .dashboard-visualizer {
     display: flex;
     height: 100%;
