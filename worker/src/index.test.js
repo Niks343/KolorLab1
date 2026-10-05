@@ -265,7 +265,7 @@ test('client phone and administrator authentication routes are disabled', async 
   }
 });
 
-test('client cards persist in the private repository, expose only the last four digits, and support deletion', async () => {
+test('client cards use PIN-protected deletion while projects sync across devices', async () => {
   const env = createEnv();
   const files = new Map();
   const originalFetch = globalThis.fetch;
@@ -273,14 +273,17 @@ test('client cards persist in the private repository, expose only the last four 
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(String(url));
     if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
-    if (parsed.pathname === '/repos/owner/private-data/contents/clients') {
-      return Response.json([...files.entries()].map(([path, file]) => ({
+    if (parsed.pathname === '/repos/owner/private-data/contents/clients'
+      || parsed.pathname === '/repos/owner/private-data/contents/projects') {
+      return Response.json([...files.entries()]
+        .filter(([path]) => path.includes(`/contents/${parsed.pathname.endsWith('/clients') ? 'clients' : 'projects'}/`))
+        .map(([path]) => ({
         type: 'file',
         name: path.split('/').pop(),
         path: path.replace('/repos/owner/private-data/contents/', ''),
       })));
     }
-    if (parsed.pathname.startsWith('/repos/owner/private-data/contents/clients/')) {
+    if (/\/contents\/(clients|projects)\//.test(parsed.pathname)) {
       const current = files.get(parsed.pathname);
       if (init.method === 'PUT') {
         const body = JSON.parse(init.body);
@@ -298,33 +301,104 @@ test('client cards persist in the private repository, expose only the last four 
     const created = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.8' },
-      body: JSON.stringify({ name: 'Анна', phone: '+7 (999) 123-45-67', consent: true }),
+      body: JSON.stringify({ name: 'Анна', phone: '+7 (999) 123-45-67', consent: true, pin: '123456' }),
     }), env);
     assert.equal(created.status, 201);
     const createdBody = await created.json();
     assert.equal(createdBody.client.name, 'Анна');
     assert.equal(createdBody.client.phoneLast4, '4567');
     assert.equal('phone' in createdBody.client, false);
+    assert.equal(createdBody.client.hasPin, true);
     const [[filePath, stored]] = [...files.entries()];
     assert.match(filePath, /\/clients\/client-/);
     assert.equal(stored.value.phone, '79991234567');
+    assert.notEqual(stored.value.pinHash, '123456');
+
+    const legacyUpdate = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.12' },
+      body: JSON.stringify({ name: 'Анна', phone: '+7 (999) 123-45-67', consent: true, pin: '654321' }),
+    }), env);
+    assert.equal(legacyUpdate.status, 403);
+
+    const clientFilePath = [...files.keys()].find((path) => path.includes('/clients/'));
+    const savedClient = files.get(clientFilePath);
+    files.set(clientFilePath, {
+      ...savedClient,
+      value: Object.fromEntries(Object.entries(savedClient.value).filter(([key]) => key !== 'pinHash')),
+    });
+    const legacyDelete = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.15' },
+      body: JSON.stringify({ pin: '123456' }),
+    }), env);
+    assert.equal(legacyDelete.status, 403);
+    files.set(clientFilePath, savedClient);
 
     const list = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
       headers: { 'CF-Connecting-IP': '192.0.2.9' },
     }), env);
     assert.deepEqual(await list.json(), { clients: [createdBody.client] });
 
+    const sharedProject = {
+      key: 'ral-9003-123',
+      clientId: createdBody.client.id,
+      projectName: 'Квартира',
+      clientName: 'Анна',
+      clientPhoneLast4: '4567',
+      color: { id: 'ral-9003', code: 'RAL 9003', name_ru: 'Белый', hex: '#FFFFFF', base: 'A' },
+      zone: 'Гостиная',
+      quantity: 12,
+      quantityUnit: 'л',
+      cans: '1 × 9 л',
+    };
+    const saveProjects = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/projects/${createdBody.client.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.13' },
+      body: JSON.stringify({ projects: [sharedProject], projectNames: ['Общий проект', 'Квартира'] }),
+    }), env);
+    assert.equal(saveProjects.status, 200);
+    const storedProject = [...files.entries()].find(([path]) => path.endsWith(`/projects/${createdBody.client.id}.json`))[1].value;
+    assert.equal('clientPhoneLast4' in storedProject.projects[0], false);
+
+    const remoteProjects = await createWorkerResponse(new Request('https://kolorlab-api.test/api/projects', {
+      headers: { 'CF-Connecting-IP': '192.0.2.14' },
+    }), env);
+    const remoteProjectData = await remoteProjects.json();
+    assert.equal(remoteProjectData.projects[0].projects[0].key, sharedProject.key);
+    assert.equal(remoteProjectData.projects[0].projectNames.includes('Квартира'), true);
+
+    const wrongPin = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.15' },
+      body: JSON.stringify({ pin: '000000' }),
+    }), env);
+    assert.equal(wrongPin.status, 403);
+    assert.equal(files.get(filePath).value.deleted, undefined);
+
     const deleted = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
       method: 'DELETE',
-      headers: { 'CF-Connecting-IP': '192.0.2.10' },
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.10' },
+      body: JSON.stringify({ pin: '123456' }),
     }), env);
     assert.equal(deleted.status, 200);
     assert.equal(files.get(filePath).value.deleted, true);
+    assert.equal(files.get(`/repos/owner/private-data/contents/projects/${createdBody.client.id}.json`).value.deleted, true);
+
+    const recreated = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.17' },
+      body: JSON.stringify({ name: 'Другой человек', phone: '+7 (999) 123-45-67', consent: true, pin: '654321' }),
+    }), env);
+    assert.equal(recreated.status, 409);
 
     const afterDeletion = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
       headers: { 'CF-Connecting-IP': '192.0.2.11' },
     }), env);
     assert.deepEqual(await afterDeletion.json(), { clients: [] });
+    assert.deepEqual(await (await createWorkerResponse(new Request('https://kolorlab-api.test/api/projects', {
+      headers: { 'CF-Connecting-IP': '192.0.2.16' },
+    }), env)).json(), { projects: [] });
   } finally {
     globalThis.fetch = originalFetch;
   }

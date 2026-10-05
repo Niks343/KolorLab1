@@ -45,6 +45,55 @@ const colors = [
 ];
 const workspaceStorageKey = 'kolorlab.workspace.v1';
 const defaultProjectName = 'Общий проект';
+
+function sharedProjectsSnapshot(projects, projectNames, clientId) {
+  return JSON.stringify({
+    projects: projects.filter((project) => project.clientId === clientId)
+      .map((project) => {
+        const color = project.color;
+        const sharedColor = {
+          id: color.id.slice(0, 200),
+          code: color.code.slice(0, 40),
+          name_ru: color.name_ru.slice(0, 80),
+          catalog: typeof color.catalog === 'string' ? color.catalog.slice(0, 80) : '',
+          hex: color.hex.toUpperCase(),
+          base: color.base === 'A' || color.base === 'C' ? color.base : null,
+          ...(Array.isArray(color.rgb) ? { rgb: color.rgb.slice(0, 3) } : {}),
+          ...(Number.isFinite(color.lrv) ? { lrv: color.lrv } : {}),
+          ...(Array.isArray(color.applications) ? { applications: color.applications.filter((item) => typeof item === 'string').slice(0, 10) } : {}),
+        };
+        const quantity = project.quantity ?? project.liters;
+        const paintProductFields = [
+          'id', 'brand', 'name', 'finish', 'purpose', 'coverageBySurface', 'coverageDescription',
+          'baseSystem', 'baseSystemByTintBase', 'packageSizesLiters', 'packageSizesKg', 'quantityUnit',
+          'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials',
+          'availabilityNote', 'pricePerUnit', 'pricePerLiter', 'source', 'custom',
+        ];
+        const paintProduct = project.paintProduct && typeof project.paintProduct === 'object'
+          ? Object.fromEntries(paintProductFields
+            .filter((key) => key in project.paintProduct)
+            .map((key) => [key, project.paintProduct[key]]))
+          : null;
+        return {
+          key: project.key,
+          clientId,
+          projectName: project.projectName.trim(),
+          color: sharedColor,
+          base: sharedColor.base,
+          zone: typeof project.zone === 'string' ? project.zone.slice(0, 80) : 'Гостиная',
+          area: Number.isFinite(project.area) ? project.area : null,
+          layers: Number.isFinite(project.layers) ? project.layers : null,
+          surface: typeof project.surface === 'string' ? project.surface.slice(0, 40) : 'wall',
+          liters: quantity,
+          quantity,
+          quantityUnit: project.quantityUnit === 'kg' ? 'kg' : 'л',
+          cans: typeof project.cans === 'string' ? project.cans.slice(0, 300) : '',
+          paintProduct,
+        };
+      }),
+    projectNames: [...new Set([...(projectNames ?? []), defaultProjectName])],
+  });
+}
 const customColorsCatalog = 'Мои цвета';
 const surfacesCatalogIds = new Set(['wall', 'plaster', 'bath', 'facade']);
 const catalogLabels = {
@@ -264,6 +313,7 @@ function readWorkspace() {
         id: client.id,
         name: client.name,
         phoneLast4: String(client.phoneLast4 ?? '').replace(/\D/g, '').slice(-4),
+        hasPin: client.hasPin === true,
         remote: client.remote === true,
       }));
     const clientIds = new Set(clients.map((client) => client.id));
@@ -439,6 +489,12 @@ function App() {
   const [newProjectName, setNewProjectName] = useState('');
   const [clientNameInput, setClientNameInput] = useState('');
   const [clientPhoneInput, setClientPhoneInput] = useState('');
+  const [clientPinInput, setClientPinInput] = useState('');
+  const [clientPinConfirmation, setClientPinConfirmation] = useState('');
+  const [deletePinInput, setDeletePinInput] = useState('');
+  const [remoteProjectsLoaded, setRemoteProjectsLoaded] = useState(!apiBaseUrl);
+  const remoteProjectSnapshotsRef = useRef(new Map());
+  const remoteProjectsNeedSyncRef = useRef(new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [clientCardId, setClientCardId] = useState('');
   const [confirmClientDeletion, setConfirmClientDeletion] = useState(false);
@@ -573,7 +629,7 @@ function App() {
     let active = true;
     const savedLocalClientIds = new Set(clients.filter((client) => !client.remote).map((client) => client.id));
     apiRequest('/clients', { token: '' })
-      .then(({ clients: remoteClients = [] }) => {
+      .then(async ({ clients: remoteClients = [] }) => {
         if (!active) return;
         const remoteClientsById = new Map(remoteClients
           .filter((client) => typeof client?.id === 'string' && typeof client.name === 'string')
@@ -587,6 +643,7 @@ function App() {
               name: client.name,
               phoneLast4: String(client.phoneLast4 ?? '').replace(/\D/g, '').slice(-4),
               createdAt: typeof client.createdAt === 'string' ? client.createdAt : '',
+              hasPin: client.hasPin === true,
               remote: true,
             });
           }
@@ -600,6 +657,55 @@ function App() {
           Object.entries(items).filter(([clientId]) => validClientIds.has(clientId)),
         ));
         setActiveClientId((currentId) => validClientIds.has(currentId) ? currentId : remoteClients[0]?.id || '');
+        const { projects: remoteProjectRecords = [] } = await apiRequest('/projects', { token: '' });
+        if (!active) return;
+        const remoteProjects = remoteProjectRecords.flatMap((record) => {
+          const client = remoteClientsById.get(record.clientId);
+          if (!client || !Array.isArray(record.projects)) return [];
+          return record.projects.flatMap((project) => {
+            const colorId = project?.color?.id;
+            const color = typeof colorId === 'string'
+              ? availableColorsById.get(colorId) ?? normalizeCustomColor(project.color) ?? getArchivedWoodProjectColor(colorId)
+              : null;
+            if (!color || typeof project.key !== 'string') return [];
+            const paintProduct = typeof project.paintProduct?.id === 'string'
+              ? availablePaintProductsById.get(project.paintProduct.id) ?? normalizeCustomPaintProduct(project.paintProduct) ?? project.paintProduct
+              : null;
+            return [{
+              ...project,
+              clientId: client.id,
+              clientName: client.name,
+              clientPhoneLast4: client.phoneLast4,
+              color,
+              base: color.base,
+              paintProduct,
+            }];
+          });
+        });
+        const mergedProjectMap = new Map(projects
+          .filter((project) => validClientIds.has(project.clientId))
+          .map((project) => [project.key, project]));
+        for (const project of remoteProjects) mergedProjectMap.set(project.key, project);
+        const mergedProjects = [...mergedProjectMap.values()];
+        setProjects(mergedProjects);
+        const remoteNamesByClient = Object.fromEntries(remoteProjectRecords
+          .filter((record) => remoteClientsById.has(record.clientId) && Array.isArray(record.projectNames))
+          .map((record) => [record.clientId, record.projectNames.filter((name) => typeof name === 'string')]));
+        const mergedNames = Object.fromEntries([...validClientIds].map((clientId) => [clientId, [...new Set([
+          ...(projectNamesByClient[clientId] ?? []),
+          ...(remoteNamesByClient[clientId] ?? []),
+          defaultProjectName,
+        ])]]));
+        setProjectNamesByClient(mergedNames);
+        remoteProjectSnapshotsRef.current = new Map([...remoteClientsById.keys()].map((clientId) => [
+          clientId,
+          sharedProjectsSnapshot(mergedProjects, mergedNames[clientId], clientId),
+        ]));
+        remoteProjectsNeedSyncRef.current = new Set([...remoteClientsById.keys()].filter((clientId) => (
+          projects.some((project) => project.clientId === clientId && !remoteProjects.some((remoteProject) => remoteProject.key === project.key))
+          || (projectNamesByClient[clientId] ?? []).some((name) => !(remoteNamesByClient[clientId] ?? []).includes(name))
+        )));
+        setRemoteProjectsLoaded(true);
       })
       .catch((error) => {
         if (active) setToast(error instanceof Error ? error.message : 'Не удалось загрузить карточки клиентов.');
@@ -608,6 +714,31 @@ function App() {
       active = false;
     };
   }, []);
+  useEffect(() => {
+    if (!remoteProjectsLoaded || !apiBaseUrl) return undefined;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      for (const client of clients.filter((item) => item.remote)) {
+        const snapshot = sharedProjectsSnapshot(projects, projectNamesByClient[client.id], client.id);
+        if (!remoteProjectsNeedSyncRef.current.has(client.id) && remoteProjectSnapshotsRef.current.get(client.id) === snapshot) continue;
+        try {
+          await apiRequest(`/projects/${encodeURIComponent(client.id)}`, {
+            method: 'PUT',
+            body: snapshot,
+          });
+          remoteProjectSnapshotsRef.current.set(client.id, snapshot);
+          remoteProjectsNeedSyncRef.current.delete(client.id);
+        } catch (error) {
+          if (active) setToast(error instanceof Error ? error.message : 'Не удалось синхронизировать проекты клиента.');
+          return;
+        }
+      }
+    }, 900);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [clients, projects, projectNamesByClient, remoteProjectsLoaded]);
   const comparedColors = comparisonIds.map((id) => availableColorsById.get(id)).filter(Boolean);
   const recommendations = useMemo(
     () => getColorRecommendations(availableColors, selected, comparisonIds),
@@ -1421,6 +1552,10 @@ function App() {
       setToast('Укажите имя клиента и номер телефона');
       return;
     }
+    if (!/^\d{6}$/.test(clientPinInput) || clientPinInput !== clientPinConfirmation) {
+      setToast('Задайте и подтвердите шестизначный PIN-код карточки.');
+      return;
+    }
     if (formData.get('clientConsent') !== 'on') {
       setToast('Подтвердите согласие клиента на хранение номера телефона.');
       return;
@@ -1429,13 +1564,14 @@ function App() {
     try {
       const { client: savedClient } = await apiRequest('/clients', {
         method: 'PUT',
-        body: JSON.stringify({ name, phone: clientPhoneInput, consent: true }),
+        body: JSON.stringify({ name, phone: clientPhoneInput, consent: true, pin: clientPinInput }),
       });
       client = {
         id: savedClient.id,
         name: savedClient.name,
         phoneLast4: savedClient.phoneLast4,
         createdAt: savedClient.createdAt,
+        hasPin: savedClient.hasPin === true,
         remote: true,
       };
     } catch (error) {
@@ -1450,15 +1586,28 @@ function App() {
     }));
     setClientNameInput('');
     setClientPhoneInput('');
+    setClientPinInput('');
+    setClientPinConfirmation('');
     setDrawerOpen(false);
   };
 
   const deleteClient = async () => {
     if (!openedClientCard) return;
+    if (!openedClientCard.hasPin) {
+      setToast('Эту карточку нельзя удалить: она создана до введения PIN-кода.');
+      return;
+    }
+    if (!/^\d{6}$/.test(deletePinInput)) {
+      setToast('Введите шестизначный PIN-код клиента.');
+      return;
+    }
     const removedProjectCount = openedClientProjects.length;
     if (openedClientCard.remote) {
       try {
-        await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}`, { method: 'DELETE' });
+        await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ pin: deletePinInput }),
+        });
       } catch (error) {
         setToast(error instanceof Error ? error.message : 'Не удалось удалить клиента из GitHub.');
         return;
@@ -1474,6 +1623,7 @@ function App() {
     if (activeClientId === openedClientCard.id) setActiveClientId('');
     setClientCardId('');
     setConfirmClientDeletion(false);
+    setDeletePinInput('');
     if (removedProjectCount) setToast(`Карточка клиента удалена вместе с проектами (${removedProjectCount}).`);
   };
 
@@ -2167,7 +2317,7 @@ function App() {
               {visibleClients.length > 0 && <div className="mb-3 grid gap-2">
                 {visibleClients.map((client) => {
                   const isActive = activeClientId === client.id;
-                  return <button key={client.id} onClick={(event) => { clientCardTriggerRef.current = event.currentTarget; setActiveClientId(client.id); setClientCardId(client.id); setConfirmClientDeletion(false); }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
+                  return <button key={client.id} onClick={(event) => { clientCardTriggerRef.current = event.currentTarget; setActiveClientId(client.id); setClientCardId(client.id); setConfirmClientDeletion(false); setDeletePinInput(''); }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
                     <span className="accent-surface text-[var(--primary-300)] flex h-9 w-9 shrink-0 items-center justify-center rounded-full"><UserRound size={16} /></span>
                     <span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold">{client.name}</span><span className="mt-1 block text-[10px] text-slate-500">Телефон ···· {client.phoneLast4}</span></span>
                     {isActive && <Check size={14} className="text-[var(--primary-300)]" />}
@@ -2178,7 +2328,12 @@ function App() {
                 <div className="text-xs font-semibold">{visibleClients.length ? 'Добавить клиента' : 'Создать карточку клиента'}</div>
                 <input value={clientNameInput} onChange={(event) => setClientNameInput(event.target.value)} autoComplete="name" placeholder="Имя клиента" aria-label="Имя клиента" className="field w-full rounded-lg px-3 py-2.5 text-xs" />
                 <input value={clientPhoneInput} onChange={(event) => setClientPhoneInput(event.target.value)} type="tel" autoComplete="tel" inputMode="tel" placeholder="Номер телефона" aria-label="Номер телефона" className="field w-full rounded-lg px-3 py-2.5 text-xs" />
-                <label className="flex items-start gap-2 text-[10px] leading-relaxed text-slate-400"><input type="checkbox" name="clientConsent" className="mt-0.5 shrink-0 accent-[var(--primary-400)]" /><span>Клиент согласен на хранение полного номера в приватной общей базе. Имя и последние 4 цифры будут видны посетителям сайта. Подробности — в <a href="https://github.com/Niks343/KolorLab1/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" className="text-[var(--primary-300)] underline underline-offset-2">уведомлении</a>.</span></label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={clientPinInput} onChange={(event) => setClientPinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="new-password" placeholder="PIN · 6 цифр" aria-label="PIN-код карточки клиента" className="field min-w-0 rounded-lg px-3 py-2.5 text-xs" />
+                  <input value={clientPinConfirmation} onChange={(event) => setClientPinConfirmation(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="new-password" placeholder="Повторите PIN" aria-label="Подтверждение PIN-кода" className="field min-w-0 rounded-lg px-3 py-2.5 text-xs" />
+                </div>
+                <p className="text-[10px] leading-relaxed text-slate-500">PIN сохраните отдельно: он понадобится для удаления карточки. На других устройствах карточка и проекты доступны для просмотра.</p>
+                <label className="flex items-start gap-2 text-[10px] leading-relaxed text-slate-400"><input type="checkbox" name="clientConsent" className="mt-0.5 shrink-0 accent-[var(--primary-400)]" /><span>Клиент согласен на хранение полного номера в приватной общей базе. Имя, последние 4 цифры и проекты видны посетителям сайта. Подробности — в <a href="https://github.com/Niks343/KolorLab1/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" className="text-[var(--primary-300)] underline underline-offset-2">уведомлении</a>.</span></label>
                 <button type="submit" className="btn-secondary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold"><Users size={14} />Сохранить клиента</button>
               </form>
             </section>
@@ -2218,13 +2373,13 @@ function App() {
             <button disabled={!clientProjects.length} onClick={copyOrder} className="btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Скопировано' : 'Скопировать для магазина'}</button>
             <button disabled={!clientProjects.length} onClick={downloadOrder} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><FileDown size={15} />Скачать спецификацию TXT</button>
             <button disabled={!clientProjects.length} onClick={() => window.print()} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Printer size={15} />Печать / сохранить PDF</button>
-            <div role="status" className={`mt-3 text-center text-[10px] ${persistenceError ? 'base-warning' : 'text-slate-600'}`}>{persistenceError ? 'Не удалось сохранить изменения на этом устройстве.' : 'Клиенты и проекты сохраняются на этом устройстве.'}</div>
+            <div role="status" className={`mt-3 text-center text-[10px] ${persistenceError ? 'base-warning' : 'text-slate-600'}`}>{persistenceError ? 'Не удалось сохранить изменения на этом устройстве.' : remoteProjectsLoaded ? 'Клиенты и проекты синхронизируются между устройствами.' : 'Загружаем общие проекты…'}</div>
             <div className="mt-2 text-center text-[10px] text-slate-600">В заказ попадут только имя клиента и последние 4 цифры телефона.</div>
           </div>
         </aside>
       </div>}
       {openedClientCard && <div className="fixed inset-0 z-[60] grid w-screen place-items-center p-4">
-        <button aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); clientCardTriggerRef.current?.focus(); }} className="drawer-backdrop absolute inset-0" />
+        <button aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); setDeletePinInput(''); clientCardTriggerRef.current?.focus(); }} className="drawer-backdrop absolute inset-0" />
         <section role="dialog" aria-modal="true" aria-labelledby="client-card-title" className="relative z-10 flex max-h-[min(680px,calc(100dvh-32px))] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#303944] bg-[#11161d] shadow-2xl">
           <div className="flex items-start justify-between gap-4 border-b border-[#252d37] px-5 py-5 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
@@ -2235,7 +2390,7 @@ function App() {
                 <p className="mt-1 text-xs text-slate-400">Телефон ···· {openedClientCard.phoneLast4}</p>
               </div>
             </div>
-            <button ref={clientCardCloseRef} aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); clientCardTriggerRef.current?.focus(); }} className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={18} /></button>
+            <button ref={clientCardCloseRef} aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); setDeletePinInput(''); clientCardTriggerRef.current?.focus(); }} className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={18} /></button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 scrollbar-thin sm:px-6">
             <div className="mb-3 flex items-center justify-between">
@@ -2254,11 +2409,13 @@ function App() {
             </div> : <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">У клиента пока нет сохранённых проектов.</div>}
           </div>
           <div className="space-y-3 border-t border-[#252d37] p-4 sm:px-6">
-            {confirmClientDeletion ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
-              <p className="text-xs leading-relaxed text-slate-300">Скрыть общую карточку «{openedClientCard.name}»? Проекты этого клиента также будут удалены из текущего браузера ({openedClientProjects.length}); они не хранятся в общей базе. Телефон может остаться в истории GitHub. Это действие нельзя отменить.</p>
+            {!openedClientCard.hasPin ? <p className="rounded-lg border border-[#2b323c] bg-[#0d1117] p-3 text-[10px] leading-relaxed text-slate-500">Эта карточка создана до введения PIN-кода. Для защиты клиента её удаление отключено.</p>
+              : confirmClientDeletion ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
+              <p className="text-xs leading-relaxed text-slate-300">Удалить общую карточку «{openedClientCard.name}» и все проекты? Телефон может остаться в истории GitHub. Это действие нельзя отменить.</p>
+              <input value={deletePinInput} onChange={(event) => setDeletePinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="current-password" placeholder="Введите PIN-код из 6 цифр" aria-label="PIN-код для удаления карточки" className="field mt-3 w-full rounded-lg px-3 py-2.5 text-xs" />
               <div className="mt-3 flex gap-2">
                 <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">Удалить карточку</button>
-                <button onClick={() => setConfirmClientDeletion(false)} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
+                <button onClick={() => { setConfirmClientDeletion(false); setDeletePinInput(''); }} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
               </div>
             </div> : <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />Удалить клиента</button>}
           </div>

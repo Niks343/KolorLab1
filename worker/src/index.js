@@ -311,7 +311,118 @@ function clientSummary(record) {
   const phoneLast4 = typeof record.phoneLast4 === 'string'
     ? record.phoneLast4.replace(/\D/g, '').slice(-4)
     : String(record.phone ?? '').replace(/\D/g, '').slice(-4);
-  return { id: record.id, name: record.name, phoneLast4, createdAt: record.createdAt ?? '' };
+  return { id: record.id, name: record.name, phoneLast4, createdAt: record.createdAt ?? '', hasPin: typeof record.pinHash === 'string' };
+}
+
+function constantTimeEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
+async function verifyClientPin(env, record, pin) {
+  if (typeof record?.pinHash !== 'string') {
+    throw new HttpError(403, 'Эта карточка создана до защиты PIN-кодом, поэтому её нельзя удалить.');
+  }
+  await allowRequest(env, `client-pin:${record.id}`, 10, 3600);
+  if (typeof pin !== 'string' || !/^\d{6}$/.test(pin)
+    || !constantTimeEqual(record.pinHash, await requestHash(env, `${record.id}:${pin}`))) {
+    throw new HttpError(403, 'Неверный PIN-код клиента.');
+  }
+}
+
+function normalizeSharedProject(value, clientId) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof value.key !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(value.key)
+    || typeof value.projectName !== 'string' || !value.projectName.trim() || value.projectName.length > 100
+    || typeof value.color?.id !== 'string' || typeof value.color?.code !== 'string'
+    || typeof value.color?.name_ru !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.color?.hex ?? '')
+    || !Number.isFinite(value.quantity ?? value.liters) || (value.quantity ?? value.liters) < 0
+    || (value.quantity ?? value.liters) > 100_000) {
+    throw new HttpError(400, 'В проекте обнаружена некорректная запись.');
+  }
+  const color = {
+    id: value.color.id.slice(0, 200),
+    code: value.color.code.slice(0, 40),
+    name_ru: value.color.name_ru.slice(0, 80),
+    catalog: typeof value.color.catalog === 'string' ? value.color.catalog.slice(0, 80) : '',
+    hex: value.color.hex.toUpperCase(),
+    base: value.color.base === 'A' || value.color.base === 'C' ? value.color.base : null,
+    ...(Array.isArray(value.color.rgb) ? { rgb: value.color.rgb.slice(0, 3) } : {}),
+    ...(Number.isFinite(value.color.lrv) ? { lrv: value.color.lrv } : {}),
+    ...(Array.isArray(value.color.applications) ? { applications: value.color.applications.filter((item) => typeof item === 'string').slice(0, 10) } : {}),
+  };
+  const paintProduct = value.paintProduct && typeof value.paintProduct === 'object' && !Array.isArray(value.paintProduct)
+    ? Object.fromEntries([
+      'id', 'brand', 'name', 'finish', 'purpose', 'coverageBySurface', 'coverageDescription',
+      'baseSystem', 'baseSystemByTintBase', 'packageSizesLiters', 'packageSizesKg', 'quantityUnit',
+      'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials',
+      'availabilityNote', 'pricePerUnit', 'pricePerLiter', 'source', 'custom',
+    ].filter((key) => key in value.paintProduct).map((key) => [key, value.paintProduct[key]]))
+    : null;
+  return {
+    key: value.key,
+    clientId,
+    projectName: value.projectName.trim(),
+    color,
+    base: color.base,
+    zone: typeof value.zone === 'string' ? value.zone.slice(0, 80) : 'Гостиная',
+    area: Number.isFinite(value.area) ? value.area : null,
+    layers: Number.isFinite(value.layers) ? value.layers : null,
+    surface: typeof value.surface === 'string' ? value.surface.slice(0, 40) : 'wall',
+    liters: value.quantity ?? value.liters,
+    quantity: value.quantity ?? value.liters,
+    quantityUnit: value.quantityUnit === 'kg' ? 'kg' : 'л',
+    cans: typeof value.cans === 'string' ? value.cans.slice(0, 300) : '',
+    paintProduct,
+  };
+}
+
+async function handleProjects(request, env, pathSegments) {
+  if (request.method === 'GET' && pathSegments.length === 0) {
+    await limitByIp(request, env, 'projects-read-ip', 120, 3600);
+    await ensurePrivateRepository(env);
+    const [records, clientRecords] = await Promise.all([
+      listGithubDirectory(env, 'projects'),
+      listGithubDirectory(env, 'clients'),
+    ]);
+    const activeClientIds = new Set(clientRecords
+      .filter((record) => clientSummary(record))
+      .map((record) => record.id));
+    return json({
+      projects: records
+        .filter((record) => record?.deleted !== true && activeClientIds.has(record?.clientId) && Array.isArray(record.projects))
+        .map((record) => ({
+          clientId: record.clientId,
+          projects: record.projects,
+          projectNames: Array.isArray(record.projectNames) ? record.projectNames : [],
+        })),
+    });
+  }
+  if (request.method !== 'PUT' || pathSegments.length !== 1) {
+    throw new HttpError(405, 'Для проектов доступны просмотр и сохранение.');
+  }
+  await limitByIp(request, env, 'projects-write-ip', 120, 3600);
+  const clientId = safeId(decodeURIComponent(pathSegments[0]));
+  if (!clientId.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
+  const body = await readJson(request, 300_000);
+  if (!Array.isArray(body.projects) || body.projects.length > 300
+    || !Array.isArray(body.projectNames) || body.projectNames.length > 100) {
+    throw new HttpError(400, 'Проверьте список проектов и названий.');
+  }
+  const clientFile = await readGithubFile(env, `clients/${clientId}.json`);
+  if (!clientSummary(clientFile?.value)) throw new HttpError(404, 'Карточка клиента не найдена.');
+  const projects = body.projects.map((project) => normalizeSharedProject(project, clientId));
+  if (new Set(projects.map((project) => project.key)).size !== projects.length) {
+    throw new HttpError(400, 'В проекте обнаружены повторяющиеся записи.');
+  }
+  const projectNames = [...new Set(body.projectNames
+    .filter((name) => typeof name === 'string' && name.trim())
+    .map((name) => name.trim().slice(0, 100)))];
+  const value = { clientId, projects, projectNames, updatedAt: new Date().toISOString() };
+  await updateGithubFile(env, `projects/${clientId}.json`, value, `projects: sync ${clientId}`);
+  return json({ ok: true, projectCount: projects.length });
 }
 
 async function handleClients(request, env, pathSegments) {
@@ -326,18 +437,27 @@ async function handleClients(request, env, pathSegments) {
     const body = await readJson(request, 4_000);
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const phone = typeof body.phone === 'string' ? body.phone.replace(/\D/g, '') : '';
-    if (!name || name.length > 100 || phone.length < 10 || phone.length > 15 || body.consent !== true) {
-      throw new HttpError(400, 'Укажите имя и корректный телефон, подтвердив согласие клиента на хранение данных.');
+    const pin = typeof body.pin === 'string' ? body.pin : '';
+    if (!name || name.length > 100 || phone.length < 10 || phone.length > 15 || body.consent !== true || !/^\d{6}$/.test(pin)) {
+      throw new HttpError(400, 'Укажите имя, телефон и шестизначный PIN-код, подтвердив согласие клиента на хранение данных.');
     }
     await ensurePrivateRepository(env);
     const id = `client-${await requestHash(env, phone)}`;
     const path = `clients/${id}.json`;
     const existing = await readGithubFile(env, path);
+    if (existing?.value?.deleted === true) {
+      throw new HttpError(409, 'Удалённую карточку нельзя создать повторно с тем же номером.');
+    }
+    if (existing && !clientSummary(existing.value)) {
+      throw new HttpError(409, 'Существующая запись клиента требует ручной проверки.');
+    }
+    if (clientSummary(existing?.value)) await verifyClientPin(env, existing.value, pin);
     const record = {
       id,
       name,
       phone,
       phoneLast4: phone.slice(-4),
+      pinHash: await requestHash(env, `${id}:${pin}`),
       createdAt: existing?.value?.createdAt || new Date().toISOString(),
     };
     if (existing) await updateGithubFile(env, path, record, `clients: update ${id}`);
@@ -348,7 +468,12 @@ async function handleClients(request, env, pathSegments) {
     await limitByIp(request, env, 'clients-delete-ip', 20, 3600);
     const id = safeId(decodeURIComponent(pathSegments[0]));
     if (!id.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
+    const body = await readJson(request, 2_000);
+    const existing = await readGithubFile(env, `clients/${id}.json`);
+    if (!clientSummary(existing?.value)) throw new HttpError(404, 'Карточка клиента не найдена.');
+    await verifyClientPin(env, existing.value, body.pin);
     await updateGithubFile(env, `clients/${id}.json`, { id, deleted: true }, `clients: delete ${id}`);
+    await updateGithubFile(env, `projects/${id}.json`, { clientId: id, projects: [], projectNames: [], deleted: true }, `projects: delete ${id}`);
     return json({ ok: true });
   }
   throw new HttpError(405, 'Для клиентов доступны просмотр, создание и удаление.');
@@ -361,6 +486,7 @@ async function handleApi(request, env) {
   const [resource, action, ...tail] = segments;
   if (resource === 'catalog') return handleCatalog(request, env, [action, ...tail].filter(Boolean));
   if (resource === 'clients') return handleClients(request, env, [action, ...tail].filter(Boolean));
+  if (resource === 'projects') return handleProjects(request, env, [action, ...tail].filter(Boolean));
   throw new HttpError(404, 'Маршрут API не найден.');
 }
 
