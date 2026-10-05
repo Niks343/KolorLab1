@@ -76,22 +76,23 @@ test('preserves plaster weight, package sizes, pricing, and metal application th
     applications: ['interior', 'metal'],
   });
 
-  test('retains mineral surfaces as a compatible material', () => {
-    const mineralPaint = normalizeCustomPaintProduct({
-      id: 'custom-paint-mineral',
-      brand: 'KolorLab',
-      name: 'Краска для минеральных оснований',
-      coverageBySurface: { plaster: [8, 8] },
-      compatibleMaterials: ['mineral'],
-    });
-    assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral']);
-  });
   const document = createCustomCatalogDocument([], [plaster], { [plaster.id]: 85 });
   const imported = parseCustomCatalogDocument(document);
   assert.equal(imported.paintProducts[0].quantityUnit, 'kg');
   assert.deepEqual(imported.paintProducts[0].packageSizesKg, [5, 15, 25]);
   assert.deepEqual(imported.paintProducts[0].applications, ['interior', 'metal']);
   assert.equal(imported.paintPricesByProduct[plaster.id], 85);
+});
+
+test('retains mineral surfaces as a compatible material', () => {
+  const mineralPaint = normalizeCustomPaintProduct({
+    id: 'custom-paint-mineral',
+    brand: 'KolorLab',
+    name: 'Краска для минеральных оснований',
+    coverageBySurface: { plaster: [8, 8] },
+    compatibleMaterials: ['mineral'],
+  });
+  assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral']);
 });
 
 test('provides all paint types and respects explicit product compatibility settings', () => {
