@@ -12,7 +12,7 @@ KolorLab использует Capacitor 8: React-приложение собир
 
 Android Studio устанавливает подходящую версию JDK. Сейчас в рабочей среде установлена только Java 8, поэтому сгенерированный Android-проект уже готов, но собрать APK здесь пока нельзя. После установки Android Studio выберите её встроенный JDK в **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK**.
 
-Если проект расположен в пути с кириллицей на Windows, в `android\gradle.properties` включён параметр `android.overridePathCheck=true`. Он снимает проверку пути Android Gradle Plugin; для сборки по-прежнему нужен JDK 17 или новее.
+Если проект расположен в пути с кириллицей на Windows, в `android\gradle.properties` включён параметр `android.overridePathCheck=true`. Он снимает проверку пути Android Gradle Plugin; для сборки нужен JDK 21 или новее.
 
 ## Разработка и сборка
 
