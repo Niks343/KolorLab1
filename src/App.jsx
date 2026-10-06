@@ -251,6 +251,19 @@ function BaseBadge({ base }) {
   );
 }
 
+function ColorFanIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 40 40" className="h-6 w-6">
+      <path d="M19.5 31 4 18.5a3 3 0 0 1-.2-4.4L8 9.8 21 28.5Z" fill="#e76f51" />
+      <path d="M20 30 9.4 8.7l5-2.2 8.2 23Z" fill="#e9a23b" />
+      <path d="m20 30 .2-25.4 5.3.3 1.2 25.1Z" fill="#d9d96a" />
+      <path d="m20.5 30 7-23.8 5.1 2.3-8.4 22Z" fill="#82b87a" />
+      <path d="m21 31 12-19.3 3.4 3.8a3 3 0 0 1-.5 4.4L23 32Z" fill="#71a9cf" />
+      <circle cx="20.5" cy="31" r="2.6" fill="#f1f5f9" stroke="#26313c" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function getArchivedWoodProjectColor(id) {
   if (!id.startsWith('valtti-') && !id.startsWith('osmo-decking-')) return null;
   return {
@@ -509,6 +522,7 @@ function App() {
   const remoteCatalogIdsRef = useRef(null);
   const legacyCatalogSyncStartedRef = useRef(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState('Визуализация');
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState('');
@@ -1829,23 +1843,28 @@ function App() {
 
   return (
     <div className="app-shell min-h-screen">
-      <header className="topbar sticky top-0 z-20 flex items-center justify-between bg-[#090c11]/90 px-4 backdrop-blur-xl sm:px-7">
+      <header className={`topbar sticky top-0 ${toolsOpen ? 'z-50' : 'z-20'} flex items-center justify-between bg-[#090c11]/90 px-4 backdrop-blur-xl sm:px-7`}>
         <div className="flex items-center gap-3">
           <img className="header-logo" src={kolorlabLogo} alt="KolorLab — лаборатория цвета" />
         </div>
-        <div className="hidden items-center gap-2 rounded-full border border-[#2b323c] bg-[#11151b] px-3 py-1.5 text-[11px] text-slate-400 md:flex"><span className="h-1.5 w-1.5 rounded-full bg-[var(--primary-400)]" />Цифровой подбор цвета <span className="ml-1 text-slate-600">·</span> Москва</div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setCatalogOpen(true)} aria-expanded={catalogOpen} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:hidden"><Paintbrush size={15} /><span className="hidden sm:inline">Каталог цветов</span><span className="sm:hidden">Каталог</span></button>
+          <button onClick={() => setCatalogOpen(true)} aria-label="Открыть каталог оттенков" title="Каталог оттенков" aria-expanded={catalogOpen} className="btn-secondary flex h-9 w-10 items-center justify-center rounded-lg xl:hidden"><ColorFanIcon /></button>
           <div role="status" aria-live="polite" className={`flex shrink-0 items-center rounded-lg border px-1.5 py-1.5 text-[9px] sm:px-2.5 sm:text-[10px] ${!isOnline || pendingSyncCount ? 'border-amber-400/20 bg-amber-400/5 text-amber-200' : 'border-emerald-400/15 text-emerald-200/70'}`}>
             {!isOnline ? 'Офлайн' : pendingSyncCount ? `Очередь ${pendingSyncCount}` : 'Онлайн'}
           </div>
           <button onClick={() => setActiveMobileTab('Краски')} className="btn-secondary hidden items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:flex"><Droplets size={15} /><span>Краски</span></button>
-          {apiBaseUrl && <>
-            <button onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><History size={14} /><span className="hidden sm:inline">История</span></button>
-            <button onClick={() => { setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><Paintbrush size={14} /><span className="hidden sm:inline">Цвет</span></button>
-            <button onClick={() => { setCatalogManagerType('paints'); setCatalogManagerOpen(true); }} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><Droplets size={14} /><span className="hidden sm:inline">Краска</span></button>
-          </>}
-          <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><ShoppingBag size={15} /><span className="hidden sm:inline">Мой проект</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
+          {apiBaseUrl && <div className="relative">
+            <button onClick={() => setToolsOpen((open) => !open)} aria-expanded={toolsOpen} aria-haspopup="menu" aria-label="Инструменты" className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><SlidersHorizontal size={15} /><span className="hidden sm:inline">Инструменты</span></button>
+            {toolsOpen && <>
+              <button aria-label="Закрыть меню инструментов" onClick={() => setToolsOpen(false)} className="fixed inset-0 z-30 cursor-default" />
+              <div role="menu" aria-label="Инструменты KolorLab" onKeyDown={(event) => { if (event.key === 'Escape') setToolsOpen(false); }} className="absolute right-0 top-full z-40 mt-2 w-52 rounded-xl border border-[#303844] bg-[#11161d] p-1.5 shadow-2xl shadow-black/50">
+                <button role="menuitem" onClick={() => { setToolsOpen(false); setHistoryOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><History size={15} /><span>История изменений</span></button>
+                <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Paintbrush size={15} /><span>Управление цветами</span></button>
+                <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('paints'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Droplets size={15} /><span>Управление красками</span></button>
+              </div>
+            </>}
+          </div>}
+          <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><ShoppingBag size={15} /><span>Проекты</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
         </div>
       </header>
 
@@ -2127,7 +2146,6 @@ function App() {
                   }
                 }
               }}
-              onManage={() => { setCatalogManagerType('paints'); setCatalogManagerOpen(true); }}
               pricesByProduct={paintPricesByProduct}
             />}
           </div>
@@ -2145,7 +2163,6 @@ function App() {
             </div>
             <div className="flex shrink-0 items-start gap-3">
               <div className="hidden items-center gap-2 text-[10px] text-slate-500 sm:flex"><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-300" />База A</span><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-300" />База C</span></div>
-              {apiBaseUrl && <button onClick={() => { setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="btn-secondary flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold sm:px-3 sm:text-xs"><ShieldCheck size={14} /><span>Управлять цветами</span></button>}
               <button aria-label="Закрыть каталог цветов" onClick={closeCatalog} className="catalog-close-button icon-button h-9 shrink-0 rounded-lg px-2 text-slate-400"><span className="catalog-close-label">Закрыть каталог</span><X size={18} className="catalog-close-icon" /></button>
             </div>
           </div>
@@ -2185,7 +2202,7 @@ function App() {
               const possibleDuplicate = availableColors.find((candidate) => candidate.id !== color.id
                 && ((normalizedCatalogText(candidate.code) === normalizedCode && normalizedCatalogText(candidate.catalog) === normalizedCatalogText(color.catalog))
                   || (normalizedCatalogText(candidate.name_ru) === normalizedName && candidate.hex.toUpperCase() === color.hex.toUpperCase())));
-              return <div key={color.id} className="swatch-card-item min-w-0">
+              return <div key={color.id} className="swatch-card-item flex h-full min-w-0 flex-col">
                 <button
                   onClick={() => {
                     if (suppressCardClickRef.current) {
@@ -2235,11 +2252,14 @@ function App() {
                   </span>
                 </button>
                 {possibleDuplicate && <div className="mt-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[9px] leading-relaxed text-amber-200/90">Возможный дубль: {possibleDuplicate.code} · {possibleDuplicate.name_ru}. Проверьте вручную.</div>}
-                <div className="mt-1.5 flex gap-1.5">
-                  <button onClick={() => toggleComparison(color)} aria-pressed={comparisonSelected} className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-semibold transition ${comparisonSelected ? 'accent-selection' : 'border-[#252c34] bg-[#10151b] text-slate-500 hover:border-[#414c59] hover:text-slate-300'}`}>
-                    {comparisonSelected ? <Check size={11} /> : <Plus size={11} />}{comparisonSelected ? 'Добавлено' : 'Добавить'}
+                <div className="mt-auto flex gap-1.5 pt-1.5">
+                  <button onClick={() => selectColor(color)} className="btn-primary flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-1.5 text-[9px] font-semibold transition hover:brightness-110">
+                    <Check size={11} className="shrink-0" /><span className="truncate">Выбрать в расчёт</span>
                   </button>
-                  <button onClick={() => setExpandedColor(color)} aria-label={`Развернуть ${color.code} на весь экран`} title="На весь экран" className="flex h-7 w-8 shrink-0 items-center justify-center rounded-md border border-[#343d48] bg-[#10151b] text-slate-400 transition hover:border-[var(--primary-400)] hover:text-[var(--primary-200)]"><Expand size={14} /></button>
+                  <button onClick={() => toggleComparison(color)} aria-pressed={comparisonSelected} className={`flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border px-1.5 text-[9px] font-semibold transition ${comparisonSelected ? 'accent-selection' : 'border-[#252c34] bg-[#10151b] text-slate-500 hover:border-[#414c59] hover:text-slate-300'}`}>
+                    {comparisonSelected ? <Check size={11} className="shrink-0" /> : <GitCompareArrows size={11} className="shrink-0" />}{comparisonSelected ? 'Сравнивается' : 'Сравнить'}
+                  </button>
+                  <button onClick={() => setExpandedColor(color)} aria-label={`Развернуть ${color.code} на весь экран`} title="На весь экран" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#343d48] bg-[#10151b] text-slate-400 transition hover:border-[var(--primary-400)] hover:text-[var(--primary-200)]"><Expand size={14} /></button>
                 </div>
               </div>;
             })}
