@@ -7,7 +7,7 @@ import {
   normalizeCustomPaintProduct,
   parseCustomCatalogDocument,
 } from './userCatalog.js';
-import { getPaintProductMetadata, paintCategories } from './paintCatalog.js';
+import { getPaintProductMetadata, paintCategories, paintFinishes } from './paintCatalog.js';
 
 const customColor = normalizeCustomColor({
   id: 'custom-color-test-1',
@@ -84,15 +84,25 @@ test('preserves plaster weight, package sizes, pricing, and metal application th
   assert.equal(imported.paintPricesByProduct[plaster.id], 85);
 });
 
-test('retains mineral surfaces and wallpaper as compatible materials', () => {
+test('retains mineral surfaces, wallpaper, radiators, and sheen in portable paint entries', () => {
   const mineralPaint = normalizeCustomPaintProduct({
     id: 'custom-paint-mineral',
     brand: 'KolorLab',
     name: 'Краска для минеральных оснований',
     coverageBySurface: { plaster: [8, 8] },
-    compatibleMaterials: ['mineral', 'wallpaper'],
+    compatibleMaterials: ['mineral', 'wallpaper', 'radiator'],
+    finish: 'Полуглянцевая',
   });
-  assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral', 'wallpaper']);
+  assert.deepEqual(mineralPaint.compatibleMaterials, ['mineral', 'wallpaper', 'radiator']);
+  const portable = parseCustomCatalogDocument(createCustomCatalogDocument([], [mineralPaint]));
+  assert.equal(portable.paintProducts[0].finish, 'Полуглянцевая');
+  assert.deepEqual(portable.paintProducts[0].compatibleMaterials, ['mineral', 'wallpaper', 'radiator']);
+});
+
+test('lists supported paint sheen choices', () => {
+  assert.deepEqual(paintFinishes, [
+    'Глянцевая', 'Матовая', 'Полуматовая', 'Полуглянцевая', 'Шелковисто-матовая', 'Глубокоматовая',
+  ]);
 });
 
 test('provides all paint types and respects explicit product compatibility settings', () => {

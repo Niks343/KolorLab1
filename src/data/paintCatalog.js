@@ -22,11 +22,21 @@ export const paintMaterials = [
   { id: 'mineral', label: 'Минеральные поверхности' },
   { id: 'wallpaper', label: 'Обои' },
   { id: 'metal', label: 'Металл' },
+  { id: 'radiator', label: 'Радиаторы' },
   { id: 'plastic', label: 'Пластик' },
   { id: 'wood', label: 'Дерево' },
   { id: 'doors', label: 'Двери' },
   { id: 'windows', label: 'Окна' },
   { id: 'slopes', label: 'Откосы' },
+];
+
+export const paintFinishes = [
+  'Глянцевая',
+  'Матовая',
+  'Полуматовая',
+  'Полуглянцевая',
+  'Шелковисто-матовая',
+  'Глубокоматовая',
 ];
 
 const categoryByText = [

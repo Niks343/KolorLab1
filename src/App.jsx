@@ -30,7 +30,7 @@ import kolorlabLogo from './assets/kolorlab-logo.png';
 import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
 import ActivityHistoryDialog from './components/ActivityHistoryDialog.jsx';
 import PaintCatalogPanel from './components/PaintCatalogPanel.jsx';
-import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from './data/paintCatalog.js';
+import { getPaintProductMetadata, paintApplications, paintCategories, paintFinishes, paintMaterials } from './data/paintCatalog.js';
 
 const colors = [
   ...baseColors.map((color) => {
@@ -46,7 +46,11 @@ const colors = [
   ...farrowBallColors,
 ];
 const workspaceStorageKey = 'kolorlab.workspace.v1';
-const defaultProjectName = 'Общий проект';
+const defaultProjectName = 'Проект клиента';
+
+function normalizeProjectName(name) {
+  return name === 'Общий проект' ? defaultProjectName : name;
+}
 
 function normalizedCatalogText(value) {
   return String(value ?? '').toLocaleLowerCase('ru').replace(/[ё]/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
@@ -83,7 +87,7 @@ function sharedProjectsSnapshot(projects, projectNames, clientId) {
         return {
           key: project.key,
           clientId,
-          projectName: project.projectName.trim(),
+          projectName: normalizeProjectName(project.projectName.trim()),
           color: sharedColor,
           base: sharedColor.base,
           zone: typeof project.zone === 'string' ? project.zone.slice(0, 80) : 'Гостиная',
@@ -97,7 +101,7 @@ function sharedProjectsSnapshot(projects, projectNames, clientId) {
           paintProduct,
         };
       }),
-    projectNames: [...new Set([...(projectNames ?? []), defaultProjectName])],
+    projectNames: [...new Set([...(projectNames ?? []).map(normalizeProjectName), defaultProjectName])],
   });
 }
 const customColorsCatalog = 'Мои цвета';
@@ -350,7 +354,9 @@ function readWorkspace() {
       return [{
         key: item.key,
         clientId: item.clientId,
-        projectName: typeof item.projectName === 'string' && item.projectName.trim() ? item.projectName : defaultProjectName,
+        projectName: typeof item.projectName === 'string' && item.projectName.trim()
+          ? normalizeProjectName(item.projectName.trim())
+          : defaultProjectName,
         clientName: clients.find((client) => client.id === item.clientId)?.name ?? '',
         clientPhoneLast4: clients.find((client) => client.id === item.clientId)?.phoneLast4 ?? '',
         color,
@@ -374,12 +380,12 @@ function readWorkspace() {
     const activeClientId = clientIds.has(parsed.activeClientId) ? parsed.activeClientId : '';
     const activePaintProductId = availablePaintProductsById.has(parsed.activePaintProductId) ? parsed.activePaintProductId : '';
     const legacyProjectNames = Array.isArray(parsed.projectNames)
-      ? parsed.projectNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim())
+      ? parsed.projectNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => normalizeProjectName(name.trim()))
       : [];
     const projectNamesByClient = Object.fromEntries(clients.map((client) => {
       const savedNames = parsed.projectNamesByClient?.[client.id];
       return [client.id, [...new Set([
-        ...(Array.isArray(savedNames) ? savedNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()) : []),
+        ...(Array.isArray(savedNames) ? savedNames.filter((name) => typeof name === 'string' && name.trim()).map((name) => normalizeProjectName(name.trim())) : []),
         ...(!parsed.projectNamesByClient && client.id === activeClientId ? legacyProjectNames : []),
         ...projects.filter((project) => project.clientId === client.id).map((project) => project.projectName),
         defaultProjectName,
@@ -511,6 +517,8 @@ function App() {
   const [clientPinInput, setClientPinInput] = useState('');
   const [clientPinConfirmation, setClientPinConfirmation] = useState('');
   const [deletePinInput, setDeletePinInput] = useState('');
+  const [projectPinInput, setProjectPinInput] = useState('');
+  const [clientProjectPins, setClientProjectPins] = useState({});
   const [remoteProjectsLoaded, setRemoteProjectsLoaded] = useState(!apiBaseUrl);
   const remoteProjectSnapshotsRef = useRef(new Map());
   const remoteProjectsNeedSyncRef = useRef(new Set());
@@ -547,7 +555,7 @@ function App() {
   const [customEntryType, setCustomEntryType] = useState('');
   const [editingCatalogEntry, setEditingCatalogEntry] = useState(null);
   const [customColorDraft, setCustomColorDraft] = useState({ code: '', name: '', hex: '#71806A' });
-  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
+  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
@@ -609,7 +617,10 @@ function App() {
   const openedClientRecord = clients.find((client) => client.id === clientCardId) ?? null;
   const openedClientCard = openedClientRecord;
   const openedClientProjects = openedClientCard
-    ? projects.filter((item) => item.clientId === openedClientCard.id)
+    ? projects.filter((item) => item.clientId === openedClientCard.id && item.projectName === activeProjectName)
+    : [];
+  const openedClientProjectNames = openedClientCard
+    ? projectNamesByClient[openedClientCard.id] ?? [defaultProjectName]
     : [];
   const clientProjects = activeClient ? projects.filter((item) => item.clientId === activeClient.id && item.projectName === activeProjectName) : [];
   const quantityUnit = selectedPaintProduct?.quantityUnit === 'kg' ? 'kg' : 'л';
@@ -646,6 +657,12 @@ function App() {
       setActiveProjectName(projectNames[0] ?? defaultProjectName);
     }
   }, [activeClientId, projectNamesByClient, activeProjectName]);
+
+  useEffect(() => {
+    setComparisonIds((ids) => ids.includes(selectedId)
+      ? ids
+      : [...ids.slice(-5), selectedId]);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!apiBaseUrl) return undefined;
@@ -696,6 +713,9 @@ function App() {
               : null;
             return [{
               ...project,
+              projectName: typeof project.projectName === 'string' && project.projectName.trim()
+                ? normalizeProjectName(project.projectName.trim())
+                : defaultProjectName,
               clientId: client.id,
               clientName: client.name,
               clientPhoneLast4: client.phoneLast4,
@@ -713,7 +733,7 @@ function App() {
         setProjects(mergedProjects);
         const remoteNamesByClient = Object.fromEntries(remoteProjectRecords
           .filter((record) => remoteClientsById.has(record.clientId) && Array.isArray(record.projectNames))
-          .map((record) => [record.clientId, record.projectNames.filter((name) => typeof name === 'string')]));
+          .map((record) => [record.clientId, record.projectNames.filter((name) => typeof name === 'string').map(normalizeProjectName)]));
         const mergedNames = Object.fromEntries([...validClientIds].map((clientId) => [clientId, [...new Set([
           ...(projectNamesByClient[clientId] ?? []),
           ...(remoteNamesByClient[clientId] ?? []),
@@ -741,13 +761,13 @@ function App() {
     if (!remoteProjectsLoaded || !apiBaseUrl) return undefined;
     let active = true;
     const timer = window.setTimeout(async () => {
-      for (const client of clients.filter((item) => item.remote)) {
+      for (const client of clients.filter((item) => item.remote && clientProjectPins[item.id])) {
         const snapshot = sharedProjectsSnapshot(projects, projectNamesByClient[client.id], client.id);
         if (!remoteProjectsNeedSyncRef.current.has(client.id) && remoteProjectSnapshotsRef.current.get(client.id) === snapshot) continue;
         try {
           await apiRequest(`/projects/${encodeURIComponent(client.id)}`, {
             method: 'PUT',
-            body: snapshot,
+            body: JSON.stringify({ ...JSON.parse(snapshot), pin: clientProjectPins[client.id] }),
             queueOffline: true,
           });
           remoteProjectSnapshotsRef.current.set(client.id, snapshot);
@@ -762,7 +782,7 @@ function App() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [clients, projects, projectNamesByClient, remoteProjectsLoaded]);
+  }, [clients, projects, projectNamesByClient, clientProjectPins, remoteProjectsLoaded]);
   const comparedColors = comparisonIds.map((id) => availableColorsById.get(id)).filter(Boolean);
   const recommendations = useMemo(
     () => getColorRecommendations(availableColors, selected, comparisonIds),
@@ -817,6 +837,12 @@ function App() {
         return next;
       });
       setActiveClientId((current) => current === oldId ? saved.id : current);
+      setClientProjectPins((items) => {
+        if (!items[oldId]) return items;
+        const next = { ...items, [saved.id]: items[oldId] };
+        delete next[oldId];
+        return next;
+      });
       setToast(`Карточка клиента «${saved.name}» синхронизирована.`);
     };
     const onSyncStatus = (event) => {
@@ -1197,13 +1223,13 @@ function App() {
         compatibleMaterials: [...metadata.compatibleMaterials],
         coverage: String(firstCoverage),
         packages: (entry.quantityUnit === 'kg' ? entry.packageSizesKg : entry.packageSizesLiters)?.join(', ') ?? '',
-        finish: entry.finish === 'Не указано' ? '' : entry.finish,
+        finish: entry.finish === 'Не указано' ? 'Матовая' : entry.finish,
         purpose: entry.purpose,
         baseSystem: entry.baseSystem === 'Совместимость баз не указана.' ? '' : entry.baseSystem,
         surfaces: [...entry.surfaces],
         tintBases: [...metadata.tintBases],
         pricePerUnit: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
-      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: '', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
+      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
     }
     setCatalogManagerOpen(false);
     setCatalogManagerType(type === 'color' ? 'colors' : 'paints');
@@ -1635,6 +1661,13 @@ function App() {
       setToast('Сначала выберите или добавьте клиента');
       return;
     }
+    if (!clientProjectPins[activeClient.id]) {
+      setClientCardId(activeClient.id);
+      setDrawerOpen(true);
+      setProjectPinInput('');
+      setToast('Введите PIN в карточке клиента, чтобы сохранять изменения проекта.');
+      return;
+    }
     setProjects((items) => [...items, {
       key: `${selected.id}-${Date.now()}`,
       clientId: activeClient.id,
@@ -1667,11 +1700,15 @@ function App() {
 
   const createProject = (event) => {
     event.preventDefault();
-    if (!activeClient) {
+    if (!activeClient || activeClient.id !== openedClientCard?.id) {
       setToast('Сначала выберите клиента, чтобы создать отдельный проект.');
       return;
     }
-    const name = newProjectName.trim();
+    if (!clientProjectPins[activeClient.id]) {
+      setToast('Сначала разблокируйте проекты PIN-кодом в карточке клиента.');
+      return;
+    }
+    const name = normalizeProjectName(newProjectName.trim());
     if (!name) {
       setToast('Введите название проекта');
       return;
@@ -1685,7 +1722,7 @@ function App() {
     }
     setProjectNamesByClient((items) => ({
       ...items,
-      [activeClient.id]: [...new Set([...(items[activeClient.id] ?? [defaultProjectName]), name])],
+      [activeClient.id]: [...new Set([...(items[activeClient.id] ?? [defaultProjectName]).map(normalizeProjectName), name])],
     }));
     setActiveProjectName(name);
     setNewProjectName('');
@@ -1731,6 +1768,7 @@ function App() {
       return;
     }
     setClients((items) => [client, ...items.filter((item) => item.id !== client.id)]);
+    setClientProjectPins((items) => ({ ...items, [client.id]: clientPinInput }));
     setActiveClientId(client.id);
     setProjectNamesByClient((items) => ({
       ...items,
@@ -1742,6 +1780,31 @@ function App() {
     setClientPinConfirmation('');
     setDrawerOpen(false);
     if (client.pendingSync) setToast('Карточка сохранена на устройстве и будет отправлена после восстановления связи.');
+  };
+
+  const unlockClientProjects = async (event) => {
+    event.preventDefault();
+    if (!openedClientCard || !/^\d{6}$/.test(projectPinInput)) {
+      setToast('Введите PIN-код клиента из 6 цифр.');
+      return;
+    }
+    if (!openedClientCard.remote) {
+      setClientProjectPins((items) => ({ ...items, [openedClientCard.id]: projectPinInput }));
+      setProjectPinInput('');
+      setToast('Управление проектами разблокировано на этом устройстве.');
+      return;
+    }
+    try {
+      await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}/verify-pin`, {
+        method: 'POST',
+        body: JSON.stringify({ pin: projectPinInput }),
+      });
+      setClientProjectPins((items) => ({ ...items, [openedClientCard.id]: projectPinInput }));
+      setProjectPinInput('');
+      setToast('Управление проектами разблокировано до закрытия вкладки.');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось проверить PIN-код.');
+    }
   };
 
   const deleteClient = async () => {
@@ -1775,6 +1838,7 @@ function App() {
       return next;
     });
     if (activeClientId === openedClientCard.id) setActiveClientId('');
+    setClientProjectPins((items) => { const next = { ...items }; delete next[openedClientCard.id]; return next; });
     setClientCardId('');
     setConfirmClientDeletion(false);
     setDeletePinInput('');
@@ -1864,7 +1928,7 @@ function App() {
               </div>
             </>}
           </div>}
-          <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><ShoppingBag size={15} /><span>Проекты</span><span className="accent-solid flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold">{projects.length}</span></button>
+          <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><Users size={15} /><span>Клиенты</span></button>
         </div>
       </header>
 
@@ -2026,7 +2090,7 @@ function App() {
                 {selectedPaintProduct && <div className="mt-3 space-y-2 border-t border-[#252b33] pt-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-100">{selectedPaintProduct.brand} · {selectedPaintProduct.name}</span>
-                    <span className="rounded-full border border-[#343d48] px-2 py-0.5 text-[9px] text-slate-400">{selectedPaintProduct.finish}</span>
+                    <span className="rounded-full border border-[#343d48] px-2 py-0.5 text-[9px] text-slate-400">Блеск: {selectedPaintProduct.finish}</span>
                   </div>
                   <p className="text-[10px] leading-relaxed text-slate-400">{selectedPaintProduct.purpose}</p>
                   {selectedPaintProduct.availabilityNote && <p className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[10px] leading-relaxed text-amber-200/80">{selectedPaintProduct.availabilityNote}</p>}
@@ -2057,31 +2121,24 @@ function App() {
               </section>
               <div className="rounded-xl border border-[#303c2c] bg-[#141a14] p-3.5">
                 <div className="flex items-center justify-between"><span className="text-xs text-slate-400">Необходимый объём</span><span className="font-['Manrope'] text-lg font-bold text-[var(--primary-100)]">{paintCoverage ? `${minimumLiters.toFixed(1).replace('.', ',')}–` : ''}{liters.toFixed(1).replace('.', ',')} {quantityUnit}</span></div>
+                <div className="mt-2 flex items-center gap-2 border-t border-[#2b3527] pt-2.5">
+                  <span className="h-8 w-8 shrink-0 rounded-md border border-white/15" style={{ backgroundColor: selected.hex }} />
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-[11px] text-slate-200">{selected.code} · {selected.name_ru}</strong><span className="text-[10px] text-slate-500">{selected.hex} · {selected.base ? `База ${selected.base}` : 'Без базы'}</span></span>
+                </div>
                 <div className="mt-2 flex items-start gap-2 border-t border-[#2b3527] pt-2.5"><ShoppingBag size={13} className="mt-0.5 shrink-0 text-slate-500" /><span className="text-[11px] leading-5 text-slate-400">{cans} <span className="text-slate-600">·</span> {selectedPaintProduct ? selectedPaintProduct.baseSystem : <span className={currentBase === 'C' ? 'base-warning' : 'text-sky-300'}>База {currentBase}</span>}</span></div>
                 {Number.isFinite(paintPricePerLiter) && <div className="mt-2 border-t border-[#2b3527] pt-2 text-right text-[11px] text-slate-300">Ориентировочная стоимость: {(liters * paintPricePerLiter).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽</div>}
               </div>
               {selected.hexEstimated && <p className="mt-1 text-[10px] leading-relaxed text-slate-500">Экранный образец приблизительный. Перед покупкой сверьте его с веером.</p>}
               {currentBase === 'C' && <div className="base-warning-surface mt-3 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-[11px]"><Lightbulb size={14} className="shrink-0" />{selectedPaintProduct && !selectedPaintProduct.tintBases?.includes('C') ? 'По каталогу оттенку нужна База C, но совместимость с системой выбранной краски не подтверждена. Уточните у производителя.' : 'Требуется прозрачная База С для оттенка. Сверьте совместимость с системой краски.'}</div>}
               <div className="mt-4">
-                <label htmlFor="project-name" className="mb-2 block text-[10px] font-semibold text-slate-500">ПРОЕКТ</label>
-                <div className="relative"><select id="project-name" value={activeProjectName} onChange={(event) => setActiveProjectName(event.target.value)} className="field w-full appearance-none rounded-lg px-3 py-2.5 pr-8 text-xs">{projectNames.map((name) => <option key={name} value={name}>{name}</option>)}</select><ChevronDown size={13} className="pointer-events-none absolute right-3 top-3 text-slate-500" /></div>
-              </div>
-              <div className="mt-4">
-                <label htmlFor="project-client" className="mb-2 block text-[10px] font-semibold text-slate-500">КЛИЕНТ ПРОЕКТА</label>
-                <div className="grid grid-cols-[1fr_auto] gap-2">
-                  <div className="relative">
-                    <select id="project-client" value={activeClientId} onChange={(event) => setActiveClientId(event.target.value)} className="field w-full appearance-none rounded-lg px-3 py-2.5 pr-8 text-xs">
-                      <option value="">Выберите клиента</option>
-                      {visibleClients.map((client) => <option key={client.id} value={client.id}>{client.name}{client.phoneLast4 ? ` · •••• ${client.phoneLast4}` : ''}</option>)}
-                    </select>
-                    <ChevronDown size={13} className="pointer-events-none absolute right-3 top-3 text-slate-500" />
-                  </div>
-                  <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-semibold"><UserRound size={14} />Клиенты</button>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold text-slate-500">{activeClient ? `Клиент: ${activeClient.name} · проект «${activeProjectName}»` : 'Проект сохраняется в карточке клиента'}</span>
+                  <button onClick={() => setDrawerOpen(true)} className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold"><UserRound size={13} />Клиенты</button>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
                 <div className="relative"><select value={zone} onChange={(event) => setZone(event.target.value)} aria-label="Зона проекта" className="field h-full w-full appearance-none rounded-lg px-3 py-2.5 pr-8 text-xs">{zones.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={13} className="pointer-events-none absolute right-3 top-3 text-slate-500" /></div>
-                <button onClick={addToProject} className="btn-primary flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold"><Plus size={15} />В проект</button>
+                <button onClick={addToProject} className="btn-primary flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold"><Plus size={15} />В карточку клиента</button>
               </div>
             </section>
             <section className={`dashboard-palettes panel min-h-0 p-4 sm:p-5 ${activeMobileTab === 'Краски' ? 'hidden' : activeMobileTab !== 'Расчёт и подбор' ? 'hidden xl:flex' : ''}`} aria-label="Карточка подбора цветов">
@@ -2410,7 +2467,11 @@ function App() {
               <input name="pricePerUnit" type="number" min="0" max="1000000" step="0.01" value={customPaintDraft.pricePerUnit} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, pricePerUnit: event.target.value }))} placeholder="Например, 890" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
             </label>
             <label className="block text-[10px] font-semibold text-slate-400">Тип / блеск
-              <input name="finish" maxLength={80} value={customPaintDraft.finish} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, finish: event.target.value }))} placeholder="Например, матовая" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
+              <select name="finish" required value={customPaintDraft.finish} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, finish: event.target.value }))} className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs">
+                {!paintFinishes.includes(customPaintDraft.finish) && customPaintDraft.finish && <option value={customPaintDraft.finish}>Текущее значение: {customPaintDraft.finish}</option>}
+                {paintFinishes.map((finish) => <option key={finish} value={finish}>{finish}</option>)}
+                <option value="Текстурная">Текстурная</option>
+              </select>
             </label>
             <label className="block text-[10px] font-semibold text-slate-400">Примечание о краске
               <input name="purpose" maxLength={180} value={customPaintDraft.purpose} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, purpose: event.target.value }))} placeholder="Назначение или ваши заметки" className="field mt-1.5 w-full rounded-lg px-3 py-2.5 text-xs" />
@@ -2456,6 +2517,7 @@ function App() {
         colorId={selected.id}
         paintId={availablePaintProducts.find((product) => product.id === paintProductId)?.id ?? ''}
         clientId={activeClientRecord?.id ?? ''}
+        clientPin={activeClientRecord ? clientProjectPins[activeClientRecord.id] ?? '' : ''}
         onRestored={() => window.location.reload()}
       />
 
@@ -2485,9 +2547,9 @@ function App() {
 
       {drawerOpen && <div className="fixed inset-0 z-40 flex justify-end">
         <button aria-label="Закрыть панель" onClick={() => setDrawerOpen(false)} className="drawer-backdrop absolute inset-0" />
-        <aside role="dialog" aria-modal="true" aria-label="Клиенты и проекты" className="drawer relative flex h-full w-full max-w-[470px] flex-col border-l border-[#29303a] bg-[#10141a]">
+        <aside role="dialog" aria-modal="true" aria-label="Карточки клиентов" className="drawer relative flex h-full w-full max-w-[470px] flex-col border-l border-[#29303a] bg-[#10141a]">
           <div className="flex items-center justify-between border-b border-[#252b33] px-5 py-5">
-            <div><div className="eyebrow">КЛИЕНТЫ И ПРОЕКТЫ</div><h2 className="mt-1 font-['Manrope'] text-lg font-bold">Проекты колеровки</h2></div>
+            <div><div className="eyebrow">КЛИЕНТЫ</div><h2 className="mt-1 font-['Manrope'] text-lg font-bold">Карточки клиентов</h2></div>
             <button aria-label="Закрыть панель" onClick={() => setDrawerOpen(false)} className="icon-button h-9 w-9 rounded-lg text-slate-400"><X size={18} /></button>
           </div>
           <div className="flex-1 space-y-5 overflow-y-auto p-5 scrollbar-thin">
@@ -2496,7 +2558,15 @@ function App() {
               {visibleClients.length > 0 && <div className="mb-3 grid gap-2">
                 {visibleClients.map((client) => {
                   const isActive = activeClientId === client.id;
-                  return <button key={client.id} onClick={(event) => { clientCardTriggerRef.current = event.currentTarget; setActiveClientId(client.id); setClientCardId(client.id); setConfirmClientDeletion(false); setDeletePinInput(''); }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
+                  return <button key={client.id} onClick={(event) => {
+                    clientCardTriggerRef.current = event.currentTarget;
+                    setActiveClientId(client.id);
+                    setActiveProjectName((projectNamesByClient[client.id] ?? [defaultProjectName])[0] ?? defaultProjectName);
+                    setClientCardId(client.id);
+                    setProjectPinInput('');
+                    setConfirmClientDeletion(false);
+                    setDeletePinInput('');
+                  }} aria-haspopup="dialog" className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${isActive ? 'accent-selection' : 'border-[#2b323c] bg-[#0d1117] hover:bg-[#181e25]'}`}>
                     <span className="accent-surface text-[var(--primary-300)] flex h-9 w-9 shrink-0 items-center justify-center rounded-full"><UserRound size={16} /></span>
                     <span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold">{client.name}</span><span className="mt-1 block text-[10px] text-slate-500">Телефон ···· {client.phoneLast4}</span></span>
                     {isActive && <Check size={14} className="text-[var(--primary-300)]" />}
@@ -2511,50 +2581,14 @@ function App() {
                   <input value={clientPinInput} onChange={(event) => setClientPinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="new-password" placeholder="PIN · 6 цифр" aria-label="PIN-код карточки клиента" className="field min-w-0 rounded-lg px-3 py-2.5 text-xs" />
                   <input value={clientPinConfirmation} onChange={(event) => setClientPinConfirmation(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="new-password" placeholder="Повторите PIN" aria-label="Подтверждение PIN-кода" className="field min-w-0 rounded-lg px-3 py-2.5 text-xs" />
                 </div>
-                <p className="text-[10px] leading-relaxed text-slate-500">PIN сохраните отдельно: он понадобится для удаления карточки. На других устройствах карточка и проекты доступны для просмотра.</p>
+                <p className="text-[10px] leading-relaxed text-slate-500">PIN сохраните отдельно: он нужен для управления проектами и удаления карточки. Чтобы редактировать проекты на другом устройстве, введите PIN внутри карточки клиента.</p>
                 <label className="flex items-start gap-2 text-[10px] leading-relaxed text-slate-400"><input type="checkbox" name="clientConsent" className="mt-0.5 shrink-0 accent-[var(--primary-400)]" /><span>Клиент согласен на хранение полного номера в приватной общей базе. Имя, последние 4 цифры и проекты видны посетителям сайта. Подробности — в <a href="https://github.com/Niks343/KolorLab1/blob/main/PRIVACY.md" target="_blank" rel="noreferrer" className="text-[var(--primary-300)] underline underline-offset-2">уведомлении</a>.</span></label>
                 <button type="submit" className="btn-secondary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-semibold"><Users size={14} />Сохранить клиента</button>
               </form>
             </section>
-            <section>
-              <div className="mb-3 flex items-center justify-between"><div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>{activeClient && <span className="text-[10px] text-slate-500">{activeClient.name} ···· {activeClient.phoneLast4}</span>}</div>
-              <form onSubmit={createProject} className="subtle-panel mb-3 flex gap-2 p-2.5">
-                <input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Название проекта" aria-label="Название нового проекта" className="field min-w-0 flex-1 rounded-lg px-2.5 py-2 text-xs" />
-                <button type="submit" className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold"><Plus size={13} />Создать</button>
-              </form>
-              <div className="mb-3 flex flex-wrap gap-1.5">
-                {projectNames.map((name) => <button key={name} onClick={() => setActiveProjectName(name)} className={`chip rounded-md px-2.5 py-1.5 text-[10px] font-semibold ${activeProjectName === name ? 'active' : ''}`}>{name}</button>)}
-              </div>
-              {!activeClient ? <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">Создайте или выберите клиента, чтобы посмотреть и сохранить его проекты.</div> :
-                clientProjects.length ? <div className="space-y-3">
-                  {clientProjects.map((item) => <article key={item.key} className="subtle-panel p-3.5">
-                    <div className="flex items-start gap-3">
-                      <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10" style={{ backgroundColor: item.color.hex }} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold">{item.color.code}</span><button onClick={() => setProjects((items) => items.filter((saved) => saved.key !== item.key))} className="action-danger text-slate-600" title="Удалить"><X size={14} /></button></div>
-                        <div className="mt-1 truncate text-[11px] text-slate-400">{item.clientName} ···· {item.clientPhoneLast4}</div>
-                        <div className="mt-1 truncate text-[11px] text-slate-400">{item.color.name_ru} · {item.zone}</div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2"><BaseBadge base={item.base} /><span className="text-[10px] text-slate-500">{item.liters.toFixed(1).replace('.', ',')} {item.quantityUnit === 'kg' ? 'кг' : 'л'} · {item.cans}</span></div>
-                        {item.paintProduct && <div className="mt-1 text-[10px] text-slate-500">{item.paintProduct.brand} · {item.paintProduct.name}{Number.isFinite(item.paintProduct.pricePerUnit ?? item.paintProduct.pricePerLiter) ? ` · ${(item.paintProduct.pricePerUnit ?? item.paintProduct.pricePerLiter).toLocaleString('ru-RU')} ₽/${item.quantityUnit === 'kg' ? 'кг' : 'л'}` : ''}</div>}
-                        {item.area && <div className="mt-1 text-[10px] text-slate-600">{item.area} м² · {item.layers} сл. · {surfaces.find((surfaceItem) => surfaceItem.id === item.surface)?.label ?? 'Поверхность'}</div>}
-                      </div>
-                    </div>
-                  </article>)}
-                  <div className="subtle-panel mt-4 p-4">
-                    <div className="eyebrow mb-3">СВОДКА ПО ОСНОВАМ</div>
-                    {['A', 'C'].map((base) => { const quantity = clientProjects.filter((item) => item.base === base).length; return <div key={base} className="flex items-center justify-between border-b border-[#232a32] py-2 last:border-0"><BaseBadge base={base} /><span className="text-xs text-slate-400">{quantity} {quantity === 1 ? 'оттенок' : 'оттенков'}</span></div>; })}
-                    {clientProjects.some((item) => !item.base) && <div className="flex items-center justify-between border-b border-[#232a32] py-2 last:border-0"><BaseBadge base={null} /><span className="text-xs text-slate-400">{clientProjects.filter((item) => !item.base).length} {clientProjects.filter((item) => !item.base).length === 1 ? 'оттенок' : 'оттенков'}</span></div>}
-                  </div>
-                </div> : <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">У клиента пока нет проектов. Выберите цвет и добавьте его в проект.</div>}
-            </section>
+            <p className="rounded-xl border border-dashed border-[#343b45] px-4 py-6 text-center text-xs leading-relaxed text-slate-500">Проекты, цвета и материалы доступны только внутри карточки выбранного клиента.</p>
           </div>
-          <div className="border-t border-[#252b33] p-5">
-            <button disabled={!clientProjects.length} onClick={copyOrder} className="btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Скопировано' : 'Скопировать для магазина'}</button>
-            <button disabled={!clientProjects.length} onClick={downloadOrder} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><FileDown size={15} />Скачать спецификацию TXT</button>
-            <button disabled={!clientProjects.length} onClick={() => window.print()} className="btn-secondary mt-2 flex w-full items-center justify-center gap-2 rounded-lg py-3 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Printer size={15} />Печать / сохранить PDF</button>
-            <div role="status" className={`mt-3 text-center text-[10px] ${persistenceError ? 'base-warning' : 'text-slate-600'}`}>{persistenceError ? 'Не удалось сохранить изменения на этом устройстве.' : remoteProjectsLoaded ? 'Клиенты и проекты синхронизируются между устройствами.' : 'Загружаем общие проекты…'}</div>
-            <div className="mt-2 text-center text-[10px] text-slate-600">В заказ попадут только имя клиента и последние 4 цифры телефона.</div>
-          </div>
+          <div role="status" className={`border-t border-[#252b33] px-5 py-3 text-center text-[10px] ${persistenceError ? 'base-warning' : 'text-slate-600'}`}>{persistenceError ? 'Не удалось сохранить изменения на этом устройстве.' : remoteProjectsLoaded ? 'Клиентские карточки синхронизируются между устройствами.' : 'Загружаем клиентские карточки…'}</div>
         </aside>
       </div>}
       {openedClientCard && <div className="fixed inset-0 z-[60] grid w-screen place-items-center p-4">
@@ -2571,26 +2605,58 @@ function App() {
             </div>
             <button ref={clientCardCloseRef} aria-label="Закрыть карточку клиента" onClick={() => { setClientCardId(''); setConfirmClientDeletion(false); setDeletePinInput(''); clientCardTriggerRef.current?.focus(); }} className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={18} /></button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 scrollbar-thin sm:px-6">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>
-              <span className="text-[10px] text-slate-500">{openedClientProjects.length}</span>
-            </div>
-            {openedClientProjects.length ? <div className="space-y-2">
-              {openedClientProjects.map((item) => <article key={item.key} className="subtle-panel flex items-center gap-3 p-3">
-                <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10" style={{ backgroundColor: item.color.hex }} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-semibold">{item.projectName}</div>
-                  <div className="mt-1 truncate text-[11px] text-slate-400">{item.color.code} · {item.color.name_ru}</div>
-                  <div className="mt-1 truncate text-[10px] text-slate-500">{item.zone} · {item.liters.toFixed(1).replace('.', ',')} {item.quantityUnit === 'kg' ? 'кг' : 'л'} · {item.base ? `База ${item.base}` : 'Без базы'}</div>
-                </div>
-              </article>)}
-            </div> : <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-8 text-center text-xs text-slate-500">У клиента пока нет сохранённых проектов.</div>}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 scrollbar-thin sm:px-6">
+            {!clientProjectPins[openedClientCard.id] && openedClientCard.hasPin && <form onSubmit={unlockClientProjects} className="subtle-panel flex gap-2 p-3">
+              <input autoComplete="current-password" aria-label="PIN-код клиента для управления проектами" type="password" inputMode="numeric" value={projectPinInput} onChange={(event) => setProjectPinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="PIN клиента · 6 цифр" className="field min-w-0 flex-1 rounded-lg px-3 py-2.5 text-xs" />
+              <button type="submit" className="btn-primary shrink-0 rounded-lg px-3 py-2.5 text-[10px] font-bold">Разблокировать</button>
+            </form>}
+            {clientProjectPins[openedClientCard.id] && <div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+              <span className="text-[10px] text-emerald-200/80">Управление проектами разблокировано</span>
+              <button onClick={() => setClientProjectPins((items) => { const next = { ...items }; delete next[openedClientCard.id]; return next; })} className="text-[10px] font-semibold text-slate-400 hover:text-white">Заблокировать</button>
+            </div>}
+            {!openedClientCard.hasPin && <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-[10px] leading-relaxed text-amber-200/80">У этой старой карточки нет PIN. Её проекты можно просматривать, но изменять или удалять их нельзя.</p>}
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="eyebrow">ПРОЕКТЫ КЛИЕНТА</div>
+                <span className="text-[10px] text-slate-500">{openedClientProjectNames.length}</span>
+              </div>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {openedClientProjectNames.map((name) => {
+                  const itemCount = projects.filter((item) => item.clientId === openedClientCard.id && item.projectName === name).length;
+                  return <button key={name} onClick={() => setActiveProjectName(name)} className={`chip rounded-md px-2.5 py-1.5 text-[10px] font-semibold ${activeProjectName === name ? 'active' : ''}`}>{name} · {itemCount}</button>;
+                })}
+              </div>
+              <form onSubmit={createProject} className="subtle-panel flex gap-2 p-2.5">
+                <input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Название нового проекта" aria-label="Название нового проекта клиента" className="field min-w-0 flex-1 rounded-lg px-2.5 py-2 text-xs" />
+                <button type="submit" disabled={!clientProjectPins[openedClientCard.id]} className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Plus size={13} />Создать</button>
+              </form>
+            </section>
+            <section>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div><div className="eyebrow">ПРОЕКТ «{activeProjectName}»</div><div className="mt-1 text-[10px] text-slate-500">{openedClientProjects.length} оттенков и материалов</div></div>
+              </div>
+              {openedClientProjects.length ? <div className="space-y-2">
+                {openedClientProjects.map((item) => <article key={item.key} className="subtle-panel flex items-center gap-3 p-3">
+                  <span className="h-11 w-11 shrink-0 rounded-lg border border-white/10" style={{ backgroundColor: item.color.hex }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-semibold">{item.color.code} · {item.color.name_ru}</div>
+                    <div className="mt-1 truncate text-[10px] text-slate-400">{item.paintProduct ? `${item.paintProduct.brand} · ${item.paintProduct.name}` : 'Краска не выбрана'} · {item.zone}</div>
+                    <div className="mt-1 truncate text-[10px] text-slate-500">{item.liters.toFixed(1).replace('.', ',')} {item.quantityUnit === 'kg' ? 'кг' : 'л'} · {item.cans} · {item.base ? `База ${item.base}` : 'Без базы'}</div>
+                  </div>
+                  {clientProjectPins[openedClientCard.id] && <button onClick={() => setProjects((items) => items.filter((saved) => saved.key !== item.key))} aria-label={`Удалить ${item.color.code} из проекта`} className="action-danger flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-rose-500/10" title="Удалить из проекта"><X size={14} /></button>}
+                </article>)}
+              </div> : <div className="rounded-xl border border-dashed border-[#343b45] px-4 py-7 text-center text-xs text-slate-500">{clientProjectPins[openedClientCard.id] ? 'Добавьте выбранный оттенок и краску из расчёта.' : 'В этом проекте пока нет сохранённых материалов.'}</div>}
+            </section>
           </div>
           <div className="space-y-3 border-t border-[#252d37] p-4 sm:px-6">
+            <button disabled={!openedClientProjects.length} onClick={copyOrder} className="btn-primary flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Скопировано' : 'Скопировать проект для магазина'}</button>
+            <div className="grid grid-cols-2 gap-2">
+              <button disabled={!openedClientProjects.length} onClick={downloadOrder} className="btn-secondary flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"><FileDown size={13} />Скачать TXT</button>
+              <button disabled={!openedClientProjects.length} onClick={() => window.print()} className="btn-secondary flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Printer size={13} />Печать / PDF</button>
+            </div>
             {!openedClientCard.hasPin ? <p className="rounded-lg border border-[#2b323c] bg-[#0d1117] p-3 text-[10px] leading-relaxed text-slate-500">Эта карточка создана до введения PIN-кода. Для защиты клиента её удаление отключено.</p>
               : confirmClientDeletion ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
-              <p className="text-xs leading-relaxed text-slate-300">Удалить общую карточку «{openedClientCard.name}» и все проекты? Телефон может остаться в истории GitHub. Это действие нельзя отменить.</p>
+              <p className="text-xs leading-relaxed text-slate-300">Удалить карточку клиента «{openedClientCard.name}» и все проекты? Телефон может остаться в истории GitHub. Это действие нельзя отменить.</p>
               <input value={deletePinInput} onChange={(event) => setDeletePinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="current-password" placeholder="Введите PIN-код из 6 цифр" aria-label="PIN-код для удаления карточки" className="field mt-3 w-full rounded-lg px-3 py-2.5 text-xs" />
               <div className="mt-3 flex gap-2">
                 <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">Удалить карточку</button>

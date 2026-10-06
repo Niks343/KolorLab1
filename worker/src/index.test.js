@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createWorkerResponse, normalizeColorRecord, normalizePaintRecord } from './index.js';
 
 function createEnv(overrides = {}) {
@@ -47,14 +48,14 @@ test('validates custom color and paint records', () => {
     applications: ['terrace', 'invalid'],
     tintable: false,
     tintBases: ['A'],
-    compatibleMaterials: ['wood', 'mineral', 'wallpaper', 'unknown'],
+    compatibleMaterials: ['wood', 'mineral', 'wallpaper', 'radiator', 'unknown'],
   }, 'custom-paint-one');
   assert.equal(normalizedPaint.pricePerUnit, 800);
   assert.equal(normalizedPaint.paintCategory, 'varnish');
   assert.deepEqual(normalizedPaint.applications, ['terrace']);
   assert.equal(normalizedPaint.tintable, false);
   assert.deepEqual(normalizedPaint.tintBases, []);
-  assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood', 'mineral', 'wallpaper']);
+  assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood', 'mineral', 'wallpaper', 'radiator']);
 });
 
 test('normalizes plaster quantity in kilograms and retains the metal application', () => {
@@ -410,7 +411,7 @@ test('client phone and administrator authentication routes are disabled', async 
   }
 });
 
-test('client cards use PIN-protected deletion while projects sync across devices', async () => {
+test('client cards and their projects require the owner PIN for changes', async () => {
   const env = createEnv();
   const files = new Map();
   const originalFetch = globalThis.fetch;
@@ -479,6 +480,12 @@ test('client cards use PIN-protected deletion while projects sync across devices
       body: JSON.stringify({ pin: '123456' }),
     }), env);
     assert.equal(legacyDelete.status, 403);
+    const legacyProjectWrite = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/projects/${createdBody.client.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.21' },
+      body: JSON.stringify({ pin: '123456', projects: [], projectNames: ['Проект клиента'] }),
+    }), env);
+    assert.equal(legacyProjectWrite.status, 403);
     files.set(clientFilePath, savedClient);
 
     const list = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients', {
@@ -489,7 +496,7 @@ test('client cards use PIN-protected deletion while projects sync across devices
     const sharedProject = {
       key: 'ral-9003-123',
       clientId: createdBody.client.id,
-      projectName: 'Квартира',
+      projectName: 'Общий проект',
       clientName: 'Анна',
       clientPhoneLast4: '4567',
       color: { id: 'ral-9003', code: 'RAL 9003', name_ru: 'Белый', hex: '#FFFFFF', base: 'A' },
@@ -498,14 +505,31 @@ test('client cards use PIN-protected deletion while projects sync across devices
       quantityUnit: 'л',
       cans: '1 × 9 л',
     };
+    const verifyPin = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}/verify-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.12' },
+      body: JSON.stringify({ pin: '123456' }),
+    }), env);
+    assert.equal(verifyPin.status, 200);
+    assert.deepEqual(await verifyPin.json(), { ok: true });
+
+    const unverifiedSave = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/projects/${createdBody.client.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.18' },
+      body: JSON.stringify({ projects: [sharedProject], projectNames: ['Квартира'] }),
+    }), env);
+    assert.equal(unverifiedSave.status, 403);
+
     const saveProjects = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/projects/${createdBody.client.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.13' },
-      body: JSON.stringify({ projects: [sharedProject], projectNames: ['Общий проект', 'Квартира'] }),
+      body: JSON.stringify({ pin: '123456', projects: [sharedProject], projectNames: ['Общий проект', 'Квартира'] }),
     }), env);
     assert.equal(saveProjects.status, 200);
     const storedProject = [...files.entries()].find(([path]) => path.endsWith(`/projects/${createdBody.client.id}.json`))[1].value;
     assert.equal('clientPhoneLast4' in storedProject.projects[0], false);
+    assert.equal(storedProject.projects[0].projectName, 'Проект клиента');
+    assert.equal(storedProject.projectNames.includes('Общий проект'), false);
 
     const remoteProjects = await createWorkerResponse(new Request('https://kolorlab-api.test/api/projects', {
       headers: { 'CF-Connecting-IP': '192.0.2.14' },
@@ -513,6 +537,19 @@ test('client cards use PIN-protected deletion while projects sync across devices
     const remoteProjectData = await remoteProjects.json();
     assert.equal(remoteProjectData.projects[0].projects[0].key, sharedProject.key);
     assert.equal(remoteProjectData.projects[0].projectNames.includes('Квартира'), true);
+    assert.equal(remoteProjectData.projects[0].projectNames.includes('Общий проект'), false);
+
+    const wrongProjectPin = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/projects/${createdBody.client.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.19' },
+      body: JSON.stringify({ pin: '000000', projects: [], projectNames: ['Проект клиента'] }),
+    }), env);
+    assert.equal(wrongProjectPin.status, 403);
+    const unchangedProjects = await createWorkerResponse(new Request('https://kolorlab-api.test/api/projects', {
+      headers: { 'CF-Connecting-IP': '192.0.2.20' },
+    }), env);
+    assert.equal(unchangedProjects.status, 200);
+    assert.equal((await unchangedProjects.json()).projects[0].projects[0].key, sharedProject.key);
 
     const wrongPin = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
       method: 'DELETE',
@@ -623,6 +660,56 @@ test('history restoration only accepts catalog and project paths and records an 
     }), env);
     assert.equal(response.status, 200);
     assert.match(restoreMessage, /\[actor:device-1234abcd\]$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('restoring a client project version requires that client PIN', async () => {
+  const env = createEnv();
+  const clientId = 'client-history';
+  const pin = '123456';
+  const clientRecord = {
+    id: clientId,
+    pinHash: createHmac('sha256', env.SESSION_SECRET).update(`${clientId}:${pin}`).digest('base64url'),
+  };
+  const originalFetch = globalThis.fetch;
+  let restored = false;
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    if (parsed.pathname.endsWith(`/clients/${clientId}.json`)) {
+      return Response.json({ sha: 'client-sha', content: Buffer.from(JSON.stringify(clientRecord)).toString('base64') });
+    }
+    if (parsed.pathname.endsWith(`/projects/${clientId}.json`) && parsed.searchParams.get('ref') === 'b'.repeat(40)) {
+      return Response.json({ content: Buffer.from(JSON.stringify({ restored: true })).toString('base64') });
+    }
+    if (parsed.pathname.endsWith(`/projects/${clientId}.json`) && !init.method) {
+      return Response.json({ sha: 'current-project-sha', content: Buffer.from('{}').toString('base64') });
+    }
+    if (parsed.pathname.endsWith(`/projects/${clientId}.json`) && init.method === 'PUT') {
+      restored = true;
+      return Response.json({ content: {} });
+    }
+    assert.fail(`Unexpected GitHub request: ${parsed.href}`);
+  };
+  try {
+    const createRequest = (requestPin) => new Request('https://kolorlab-api.test/api/history/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: `projects/${clientId}.json`,
+        sha: 'b'.repeat(40),
+        ...(requestPin ? { pin: requestPin } : {}),
+      }),
+    });
+    const unauthorized = await createWorkerResponse(createRequest('000000'), env);
+    assert.equal(unauthorized.status, 403);
+    assert.equal(restored, false);
+
+    const authorized = await createWorkerResponse(createRequest(pin), env);
+    assert.equal(authorized.status, 200, await authorized.clone().text());
+    assert.equal(restored, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

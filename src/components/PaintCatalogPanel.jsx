@@ -189,7 +189,7 @@ export default function PaintCatalogPanel({ products, selectedId, onSelect, pric
             </div>
             {active && <Check size={15} className="mt-1 shrink-0 text-[var(--primary-300)]" aria-label="Выбрана" />}
           </div>
-          {product.finish && <p className="mt-1 text-[10px] text-slate-400">{product.finish}</p>}
+          {product.finish && <p className="mt-1 text-[10px] text-slate-400"><span className="text-slate-500">Блеск:</span> {product.finish}</p>}
           {product.purpose && <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{product.purpose}</p>}
           {duplicates.length > 0 && <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle size={11} className="mt-0.5 shrink-0" /><span>Возможный дубликат: {duplicates.slice(0, 2).map((item) => `${item.brand} · ${item.name}`).join('; ')}. Проверьте вручную.</span></div>}
           {tags.length > 0

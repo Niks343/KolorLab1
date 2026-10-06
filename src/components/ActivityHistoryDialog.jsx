@@ -15,7 +15,7 @@ function getPath(kind, ids) {
   return '';
 }
 
-export default function ActivityHistoryDialog({ open, onClose, colorId, paintId, clientId, onRestored }) {
+export default function ActivityHistoryDialog({ open, onClose, colorId, paintId, clientId, clientPin, onRestored }) {
   const [kind, setKind] = useState('color');
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -54,7 +54,7 @@ export default function ActivityHistoryDialog({ open, onClose, colorId, paintId,
     try {
       await apiRequest('/history/restore', {
         method: 'POST',
-        body: JSON.stringify({ path, sha: entry.sha }),
+        body: JSON.stringify({ path, sha: entry.sha, ...(kind === 'project' ? { pin: clientPin } : {}) }),
       });
       await loadHistory();
       onRestored?.(kind);
@@ -91,9 +91,9 @@ export default function ActivityHistoryDialog({ open, onClose, colorId, paintId,
                     <div className="mt-1 text-[10px] text-slate-400">{entry.author}{entry.actor ? ` · ${entry.actor}` : ''}</div>
                     <time className="mt-1 block text-[9px] text-slate-500" dateTime={entry.date}>{entry.date ? new Date(entry.date).toLocaleString('ru-RU') : 'Дата не указана'} · {entry.sha.slice(0, 8)}</time>
                   </div>
-                  <button type="button" onClick={() => restoreVersion(entry)} disabled={index === 0 || Boolean(restoringSha)} className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[9px] font-semibold disabled:cursor-not-allowed disabled:opacity-40">
+                  <button type="button" onClick={() => restoreVersion(entry)} disabled={index === 0 || Boolean(restoringSha) || (kind === 'project' && !clientPin)} className="btn-secondary flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[9px] font-semibold disabled:cursor-not-allowed disabled:opacity-40">
                     {restoringSha === entry.sha ? <LoaderCircle size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                    {index === 0 ? 'Текущая версия' : 'Восстановить'}
+                    {index === 0 ? 'Текущая версия' : kind === 'project' && !clientPin ? 'Разблокируйте карточку' : 'Восстановить'}
                   </button>
                 </div>
               </li>)}

@@ -1,7 +1,7 @@
 const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
 const allowedPaintCategories = new Set(['facade', 'interior', 'plaster', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
 const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath', 'metal']);
-const allowedPaintMaterials = new Set(['mineral', 'wallpaper', 'metal', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
+const allowedPaintMaterials = new Set(['mineral', 'wallpaper', 'metal', 'radiator', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -243,6 +243,12 @@ async function handleHistory(request, env, pathSegments) {
     if (typeof body.sha !== 'string' || !/^[a-f0-9]{40}$/i.test(body.sha)) {
       throw new HttpError(400, 'Выберите версию из истории.');
     }
+    const projectMatch = path.match(/^projects\/(client-[a-zA-Z0-9_-]{1,200})\.json$/);
+    if (projectMatch) {
+      const client = await readGithubFile(env, `clients/${projectMatch[1]}.json`);
+      if (!client) throw new HttpError(404, 'Карточка клиента не найдена.');
+      await verifyClientPin(env, client.value, body.pin);
+    }
     const previous = await githubRequest(env, `${repositoryPath(env, path)}?ref=${encodeURIComponent(body.sha)}`, { allowNotFound: true });
     if (!previous) throw new HttpError(404, 'Выбранная версия записи не найдена.');
     const value = decodeGithubFile(previous);
@@ -420,11 +426,11 @@ function constantTimeEqual(left, right) {
 
 async function verifyClientPin(env, record, pin) {
   if (typeof record?.pinHash !== 'string') {
-    throw new HttpError(403, 'Эта карточка создана до защиты PIN-кодом, поэтому её нельзя удалить.');
+    throw new HttpError(403, 'Эта карточка создана до защиты PIN-кодом; изменение проектов недоступно.');
   }
-  await allowRequest(env, `client-pin:${record.id}`, 10, 3600);
   if (typeof pin !== 'string' || !/^\d{6}$/.test(pin)
     || !constantTimeEqual(record.pinHash, await requestHash(env, `${record.id}:${pin}`))) {
+    await allowRequest(env, `client-pin:${record.id}`, 10, 3600);
     throw new HttpError(403, 'Неверный PIN-код клиента.');
   }
 }
@@ -461,7 +467,7 @@ function normalizeSharedProject(value, clientId) {
   return {
     key: value.key,
     clientId,
-    projectName: value.projectName.trim(),
+    projectName: value.projectName.trim() === 'Общий проект' ? 'Проект клиента' : value.projectName.trim(),
     color,
     base: color.base,
     zone: typeof value.zone === 'string' ? value.zone.slice(0, 80) : 'Гостиная',
@@ -510,13 +516,14 @@ async function handleProjects(request, env, pathSegments) {
   }
   const clientFile = await readGithubFile(env, `clients/${clientId}.json`);
   if (!clientSummary(clientFile?.value)) throw new HttpError(404, 'Карточка клиента не найдена.');
+  await verifyClientPin(env, clientFile.value, body.pin);
   const projects = body.projects.map((project) => normalizeSharedProject(project, clientId));
   if (new Set(projects.map((project) => project.key)).size !== projects.length) {
     throw new HttpError(400, 'В проекте обнаружены повторяющиеся записи.');
   }
   const projectNames = [...new Set(body.projectNames
     .filter((name) => typeof name === 'string' && name.trim())
-    .map((name) => name.trim().slice(0, 100)))];
+    .map((name) => (name.trim() === 'Общий проект' ? 'Проект клиента' : name.trim()).slice(0, 100)))];
   const value = { clientId, projects, projectNames, updatedAt: new Date().toISOString() };
   await updateGithubFile(env, `projects/${clientId}.json`, value, withActor(request, `projects: sync ${clientId}`));
   return json({ ok: true, projectCount: projects.length });
@@ -571,6 +578,16 @@ async function handleClients(request, env, pathSegments) {
     await verifyClientPin(env, existing.value, body.pin);
     await updateGithubFile(env, `clients/${id}.json`, { id, deleted: true }, withActor(request, `clients: delete ${id}`));
     await updateGithubFile(env, `projects/${id}.json`, { clientId: id, projects: [], projectNames: [], deleted: true }, withActor(request, `projects: delete ${id}`));
+    return json({ ok: true });
+  }
+  if (pathSegments.length === 2 && pathSegments[1] === 'verify-pin' && request.method === 'POST') {
+    await limitByIp(request, env, 'client-pin-verify-ip', 30, 3600);
+    const id = safeId(decodeURIComponent(pathSegments[0]));
+    if (!id.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
+    const body = await readJson(request, 2_000);
+    const existing = await readGithubFile(env, `clients/${id}.json`);
+    if (!clientSummary(existing?.value)) throw new HttpError(404, 'Карточка клиента не найдена.');
+    await verifyClientPin(env, existing.value, body.pin);
     return json({ ok: true });
   }
   throw new HttpError(405, 'Для клиентов доступны просмотр, создание и удаление.');
