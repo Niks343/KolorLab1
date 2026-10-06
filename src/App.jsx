@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowDown, ArrowDownUp, ArrowRight, Building2, Camera, Check, ChevronDown, Copy, Droplets, FileDown, FileUp,
-  Expand, GitCompareArrows, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
+  Expand, GitCompareArrows, History, Image as ImageIcon, Layers3, Lightbulb, Paintbrush, Plus, Printer,
   Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Trash2, UserRound,
   Users, X,
 } from 'lucide-react';
@@ -12,7 +12,8 @@ import { Share } from '@capacitor/share';
 import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
-import { apiBaseUrl, apiRequest } from './data/apiClient.js';
+import { apiBaseUrl, apiRequest, flushOfflineQueue } from './data/apiClient.js';
+import { readOfflineRequests } from './data/offlineQueue.js';
 import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
 import {
   createCustomCatalogDocument,
@@ -27,6 +28,7 @@ import wallpaperImage from './assets/surfaces/paintable-wallpaper.jpg';
 import plasterImage from './assets/surfaces/plaster.jpg';
 import kolorlabLogo from './assets/kolorlab-logo.png';
 import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
+import ActivityHistoryDialog from './components/ActivityHistoryDialog.jsx';
 import PaintCatalogPanel from './components/PaintCatalogPanel.jsx';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from './data/paintCatalog.js';
 
@@ -45,6 +47,10 @@ const colors = [
 ];
 const workspaceStorageKey = 'kolorlab.workspace.v1';
 const defaultProjectName = 'Общий проект';
+
+function normalizedCatalogText(value) {
+  return String(value ?? '').toLocaleLowerCase('ru').replace(/[ё]/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+}
 
 function sharedProjectsSnapshot(projects, projectNames, clientId) {
   return JSON.stringify({
@@ -506,6 +512,9 @@ function App() {
   const [activeMobileTab, setActiveMobileTab] = useState('Визуализация');
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [visibleCount, setVisibleCount] = useState(24);
   const [catalogShowTop, setCatalogShowTop] = useState(false);
   const [catalogDock, setCatalogDock] = useState({ left: 0, width: '100vw' });
@@ -725,6 +734,7 @@ function App() {
           await apiRequest(`/projects/${encodeURIComponent(client.id)}`, {
             method: 'PUT',
             body: snapshot,
+            queueOffline: true,
           });
           remoteProjectSnapshotsRef.current.set(client.id, snapshot);
           remoteProjectsNeedSyncRef.current.delete(client.id);
@@ -756,6 +766,72 @@ function App() {
     setVisibleCount(24);
     setAnalogMenu(null);
   }, [catalog, baseFilter, applicationFilter, familyFilter, lightnessFilter, search]);
+
+  useEffect(() => {
+    let active = true;
+    const refreshQueue = async () => {
+      try {
+        const queued = await readOfflineRequests();
+        if (active) setPendingSyncCount(queued.length);
+      } catch (error) {
+        console.error('Не удалось прочитать очередь офлайн-синхронизации.', error);
+        if (active) setToast('Не удалось проверить очередь синхронизации. Локальные данные сохранены.');
+      }
+    };
+    const onOnline = () => {
+      setIsOnline(true);
+      flushOfflineQueue().catch((error) => {
+        console.error('Не удалось отправить очередь офлайн-синхронизации.', error);
+      });
+    };
+    const onOffline = () => setIsOnline(false);
+    const onQueueChange = () => refreshQueue();
+    const onWriteComplete = (event) => {
+      const { path, metadata, payload } = event.detail ?? {};
+      if (path !== '/clients' || !metadata?.clientId || !payload?.client?.id) return;
+      const oldId = metadata.clientId;
+      const saved = payload.client;
+      setClients((items) => items.map((item) => item.id === oldId
+        ? { ...item, id: saved.id, name: saved.name, phoneLast4: saved.phoneLast4, createdAt: saved.createdAt, remote: true, pendingSync: false }
+        : item));
+      setProjects((items) => items.map((project) => project.clientId === oldId
+        ? { ...project, clientId: saved.id }
+        : project));
+      setProjectNamesByClient((items) => {
+        const next = { ...items, [saved.id]: items[oldId] ?? [defaultProjectName] };
+        delete next[oldId];
+        return next;
+      });
+      setActiveClientId((current) => current === oldId ? saved.id : current);
+      setToast(`Карточка клиента «${saved.name}» синхронизирована.`);
+    };
+    const onSyncStatus = (event) => {
+      const { sent = 0, remaining = 0, failure = '' } = event.detail ?? {};
+      setPendingSyncCount(remaining);
+      if (failure) {
+        setToast(failure);
+      } else if (sent > 0) {
+        setToast(remaining
+          ? `Синхронизировано записей: ${sent}. В очереди осталось: ${remaining}.`
+          : `Синхронизировано записей: ${sent}.`);
+      }
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('kolorlab-sync-queue-changed', onQueueChange);
+    window.addEventListener('kolorlab-sync-write-complete', onWriteComplete);
+    window.addEventListener('kolorlab-sync-status', onSyncStatus);
+    refreshQueue();
+    if (navigator.onLine) onOnline();
+    return () => {
+      active = false;
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('kolorlab-sync-queue-changed', onQueueChange);
+      window.removeEventListener('kolorlab-sync-write-complete', onWriteComplete);
+      window.removeEventListener('kolorlab-sync-status', onSyncStatus);
+    };
+  }, []);
 
   useEffect(() => {
     if (skipInitialPersistenceRef.current) {
@@ -1142,11 +1218,14 @@ function App() {
       return;
     }
     setCatalogSavingId(color.id);
+    let queued = false;
     try {
-      await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, {
-        method: editing ? 'PUT' : 'POST',
+      const result = await apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, {
+        method: 'PUT',
         body: JSON.stringify(color),
+        queueOffline: true,
       });
+      queued = result.queued === true;
       setCustomColors((items) => editing
         ? items.some((item) => item.id === color.id)
           ? items.map((item) => item.id === color.id ? color : item)
@@ -1176,7 +1255,9 @@ function App() {
     setActiveMobileTab('Визуализация');
     setCatalogOpen(true);
     setCatalogManagerOpen(true);
-    setToast(editing ? `${color.code} обновлён в общей базе GitHub` : `${color.code} добавлен в общую базу GitHub`);
+    setToast(queued
+      ? `${color.code} сохранён на устройстве и отправится при восстановлении связи.`
+      : editing ? `${color.code} обновлён в общей базе.` : `${color.code} добавлен в общую базу.`);
   };
 
   const addCustomPaintProduct = async (event) => {
@@ -1233,11 +1314,14 @@ function App() {
       return;
     }
     setCatalogSavingId(product.id);
+    let queued = false;
     try {
-      await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
-        method: editing ? 'PUT' : 'POST',
+      const result = await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
+        method: 'PUT',
         body: JSON.stringify({ ...product, pricePerUnit }),
+        queueOffline: true,
       });
+      queued = result.queued === true;
       setCustomPaintProducts((items) => editing
         ? items.some((item) => item.id === product.id)
           ? items.map((item) => item.id === product.id ? product : item)
@@ -1268,19 +1352,23 @@ function App() {
     setEditingCatalogEntry(null);
     setCatalogManagerOpen(true);
     setActiveMobileTab('Краски');
-    setToast(editing
-      ? `${product.brand} · ${product.name} обновлена в общей базе GitHub`
-      : `${product.brand} · ${product.name} добавлена в общую базу GitHub`);
+    setToast(queued
+      ? `${product.brand} · ${product.name} сохранена на устройстве и отправится при восстановлении связи.`
+      : editing ? `${product.brand} · ${product.name} обновлена в общей базе.`
+        : `${product.brand} · ${product.name} добавлена в общую базу.`);
   };
 
   const deleteCatalogEntry = async (type, entry) => {
     const label = type === 'color' ? `${entry.code} · ${entry.name_ru}` : `${entry.brand} · ${entry.name}`;
     if (!window.confirm(`Удалить «${label}» из общей базы GitHub? Это действие нельзя отменить.`)) return;
     setCatalogSavingId(entry.id);
+    let queued = false;
     try {
-      await apiRequest(`/catalog/${type === 'color' ? 'colors' : 'paints'}/${encodeURIComponent(entry.id)}`, {
+      const result = await apiRequest(`/catalog/${type === 'color' ? 'colors' : 'paints'}/${encodeURIComponent(entry.id)}`, {
         method: 'DELETE',
+        queueOffline: true,
       });
+      queued = result.queued === true;
       if (type === 'color') {
         setCustomColors((items) => items.filter((item) => item.id !== entry.id));
         setDeletedCatalogIds((ids) => new Set([...ids, entry.id]));
@@ -1304,7 +1392,7 @@ function App() {
           setPaintProductId(nextProduct?.id ?? '');
         }
       }
-      setToast(`${label} удалён из общей базы GitHub.`);
+      setToast(queued ? `${label} будет удалён из общей базы при восстановлении связи.` : `${label} удалён из общей базы GitHub.`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Не удалось удалить запись из GitHub.');
     } finally {
@@ -1317,13 +1405,17 @@ function App() {
     if (!apiUser?.isAdmin || !product) return;
     setCatalogSavingId(product.id);
     try {
-      await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
+      const result = await apiRequest(`/catalog/paints/${encodeURIComponent(product.id)}`, {
         method: 'PUT',
         body: JSON.stringify({
           ...product,
           pricePerLiter: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
         }),
+        queueOffline: true,
       });
+      setToast(result.queued
+        ? `Цена для ${product.brand} · ${product.name} сохранена на устройстве и отправится при восстановлении связи.`
+        : `Цена для ${product.brand} · ${product.name} сохранена.`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Не удалось сохранить цену краски в GitHub.');
     } finally {
@@ -1396,6 +1488,7 @@ function App() {
         ...imported.colors.map((color) => apiRequest(`/catalog/colors/${encodeURIComponent(color.id)}`, {
           method: 'PUT',
           body: JSON.stringify(color),
+          queueOffline: true,
         })),
         ...imported.paintProducts.map((paint) => apiRequest(`/catalog/paints/${encodeURIComponent(paint.id)}`, {
           method: 'PUT',
@@ -1403,6 +1496,7 @@ function App() {
             ...paint,
             pricePerLiter: imported.paintPricesByProduct[paint.id] ?? null,
           }),
+          queueOffline: true,
         })),
       ];
       await Promise.all(writes);
@@ -1606,6 +1700,8 @@ function App() {
       const { client: savedClient } = await apiRequest('/clients', {
         method: 'PUT',
         body: JSON.stringify({ name, phone: clientPhoneInput, consent: true, pin: clientPinInput }),
+        queueOffline: true,
+        offlineMetadata: { clientId: `client-pending-${globalThis.crypto.randomUUID()}` },
       });
       client = {
         id: savedClient.id,
@@ -1613,7 +1709,8 @@ function App() {
         phoneLast4: savedClient.phoneLast4,
         createdAt: savedClient.createdAt,
         hasPin: savedClient.hasPin === true,
-        remote: true,
+        remote: savedClient.remote !== false,
+        pendingSync: savedClient.pendingSync === true,
       };
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Не удалось сохранить клиента в GitHub.');
@@ -1630,6 +1727,7 @@ function App() {
     setClientPinInput('');
     setClientPinConfirmation('');
     setDrawerOpen(false);
+    if (client.pendingSync) setToast('Карточка сохранена на устройстве и будет отправлена после восстановления связи.');
   };
 
   const deleteClient = async () => {
@@ -1648,6 +1746,7 @@ function App() {
         await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}`, {
           method: 'DELETE',
           body: JSON.stringify({ pin: deletePinInput }),
+          queueOffline: true,
         });
       } catch (error) {
         setToast(error instanceof Error ? error.message : 'Не удалось удалить клиента из GitHub.');
@@ -1737,8 +1836,12 @@ function App() {
         <div className="hidden items-center gap-2 rounded-full border border-[#2b323c] bg-[#11151b] px-3 py-1.5 text-[11px] text-slate-400 md:flex"><span className="h-1.5 w-1.5 rounded-full bg-[var(--primary-400)]" />Цифровой подбор цвета <span className="ml-1 text-slate-600">·</span> Москва</div>
         <div className="flex items-center gap-2">
           <button onClick={() => setCatalogOpen(true)} aria-expanded={catalogOpen} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:hidden"><Paintbrush size={15} /><span className="hidden sm:inline">Каталог цветов</span><span className="sm:hidden">Каталог</span></button>
+          <div role="status" aria-live="polite" className={`flex shrink-0 items-center rounded-lg border px-1.5 py-1.5 text-[9px] sm:px-2.5 sm:text-[10px] ${!isOnline || pendingSyncCount ? 'border-amber-400/20 bg-amber-400/5 text-amber-200' : 'border-emerald-400/15 text-emerald-200/70'}`}>
+            {!isOnline ? 'Офлайн' : pendingSyncCount ? `Очередь ${pendingSyncCount}` : 'Онлайн'}
+          </div>
           <button onClick={() => setActiveMobileTab('Краски')} className="btn-secondary hidden items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:flex"><Droplets size={15} /><span>Краски</span></button>
           {apiBaseUrl && <>
+            <button onClick={() => setHistoryOpen(true)} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><History size={14} /><span className="hidden sm:inline">История</span></button>
             <button onClick={() => { setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><Paintbrush size={14} /><span className="hidden sm:inline">Цвет</span></button>
             <button onClick={() => { setCatalogManagerType('paints'); setCatalogManagerOpen(true); }} className="btn-secondary flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold"><Droplets size={14} /><span className="hidden sm:inline">Краска</span></button>
           </>}
@@ -2025,6 +2128,7 @@ function App() {
                 }
               }}
               onManage={() => { setCatalogManagerType('paints'); setCatalogManagerOpen(true); }}
+              pricesByProduct={paintPricesByProduct}
             />}
           </div>
         </div>
@@ -2076,6 +2180,11 @@ function App() {
               const ink = lightSwatch ? '#1e293b' : '#f8fafc';
               const catalogLabel = getCatalogLabel(color.catalog);
               const applications = color.applications ?? [];
+              const normalizedCode = normalizedCatalogText(color.code);
+              const normalizedName = normalizedCatalogText(color.name_ru);
+              const possibleDuplicate = availableColors.find((candidate) => candidate.id !== color.id
+                && ((normalizedCatalogText(candidate.code) === normalizedCode && normalizedCatalogText(candidate.catalog) === normalizedCatalogText(color.catalog))
+                  || (normalizedCatalogText(candidate.name_ru) === normalizedName && candidate.hex.toUpperCase() === color.hex.toUpperCase())));
               return <div key={color.id} className="swatch-card-item min-w-0">
                 <button
                   onClick={() => {
@@ -2125,6 +2234,7 @@ function App() {
                     <span className="rounded-full border border-current/20 bg-black/[.07] px-2 py-0.5 text-[9px] font-bold">База {color.base}</span>
                   </span>
                 </button>
+                {possibleDuplicate && <div className="mt-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[9px] leading-relaxed text-amber-200/90">Возможный дубль: {possibleDuplicate.code} · {possibleDuplicate.name_ru}. Проверьте вручную.</div>}
                 <div className="mt-1.5 flex gap-1.5">
                   <button onClick={() => toggleComparison(color)} aria-pressed={comparisonSelected} className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[9px] font-semibold transition ${comparisonSelected ? 'accent-selection' : 'border-[#252c34] bg-[#10151b] text-slate-500 hover:border-[#414c59] hover:text-slate-300'}`}>
                     {comparisonSelected ? <Check size={11} /> : <Plus size={11} />}{comparisonSelected ? 'Добавлено' : 'Добавить'}
@@ -2319,6 +2429,14 @@ function App() {
         onDeleteColor={(color) => deleteCatalogEntry('color', color)}
         onEditPaint={(paint) => openCatalogEntryForm('paint', paint)}
         onDeletePaint={(paint) => deleteCatalogEntry('paint', paint)}
+      />
+      <ActivityHistoryDialog
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        colorId={selected.id}
+        paintId={availablePaintProducts.find((product) => product.id === paintProductId)?.id ?? ''}
+        clientId={activeClientRecord?.id ?? ''}
+        onRestored={() => window.location.reload()}
       />
 
       {expandedColor && <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen flex-col justify-between overflow-hidden" style={{ backgroundColor: expandedColor.hex }}>

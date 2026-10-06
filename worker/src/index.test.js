@@ -472,6 +472,7 @@ test('client cards use PIN-protected deletion while projects sync across devices
       ...savedClient,
       value: Object.fromEntries(Object.entries(savedClient.value).filter(([key]) => key !== 'pinHash')),
     });
+
     const legacyDelete = await createWorkerResponse(new Request(`https://kolorlab-api.test/api/clients/${createdBody.client.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.15' },
@@ -544,6 +545,84 @@ test('client cards use PIN-protected deletion while projects sync across devices
     assert.deepEqual(await (await createWorkerResponse(new Request('https://kolorlab-api.test/api/projects', {
       headers: { 'CF-Connecting-IP': '192.0.2.16' },
     }), env)).json(), { projects: [] });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('history lists safe change metadata without exposing record snapshots', async () => {
+  const env = createEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    if (parsed.pathname === '/repos/owner/private-data/commits') {
+      assert.equal(parsed.searchParams.get('path'), 'catalog/colors/custom-color-one.json');
+      return Response.json([{
+        sha: 'a'.repeat(40),
+        author: { login: 'operator' },
+        commit: {
+          author: { date: '2026-10-06T12:00:00Z', name: 'Operator' },
+          message: 'catalog: update colors custom-color-one [actor:device-1234abcd]',
+        },
+      }]);
+    }
+    assert.fail(`Unexpected GitHub request: ${parsed.href}`);
+  };
+  try {
+    const response = await createWorkerResponse(new Request(
+      'https://kolorlab-api.test/api/history?path=catalog%2Fcolors%2Fcustom-color-one.json',
+    ), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      entries: [{
+        sha: 'a'.repeat(40),
+        date: '2026-10-06T12:00:00Z',
+        author: 'operator',
+        actor: 'device-1234abcd',
+        action: 'catalog: update colors custom-color-one',
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('history restoration only accepts catalog and project paths and records an actor label', async () => {
+  const env = createEnv();
+  const originalFetch = globalThis.fetch;
+  const restoredColor = { id: 'custom-color-one', code: 'D-01', name_ru: 'Версия из истории', hex: '#AABBCC' };
+  let restoreMessage = '';
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    if (parsed.pathname.endsWith('/custom-color-one.json') && parsed.searchParams.get('ref') === 'b'.repeat(40)) {
+      return Response.json({ content: Buffer.from(JSON.stringify(restoredColor)).toString('base64') });
+    }
+    if (parsed.pathname.endsWith('/custom-color-one.json') && !init.method) {
+      return Response.json({ sha: 'current-sha', content: Buffer.from('{}').toString('base64') });
+    }
+    if (parsed.pathname.endsWith('/custom-color-one.json') && init.method === 'PUT') {
+      restoreMessage = JSON.parse(init.body).message;
+      return Response.json({ content: {} });
+    }
+    assert.fail(`Unexpected GitHub request: ${parsed.href}`);
+  };
+  try {
+    const invalid = await createWorkerResponse(new Request('https://kolorlab-api.test/api/history/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Kolorlab-Actor': 'device-1234abcd' },
+      body: JSON.stringify({ path: 'clients/client-private.json', sha: 'b'.repeat(40) }),
+    }), env);
+    assert.equal(invalid.status, 400);
+
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/history/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Kolorlab-Actor': 'device-1234abcd' },
+      body: JSON.stringify({ path: 'catalog/colors/custom-color-one.json', sha: 'b'.repeat(40) }),
+    }), env);
+    assert.equal(response.status, 200);
+    assert.match(restoreMessage, /\[actor:device-1234abcd\]$/);
   } finally {
     globalThis.fetch = originalFetch;
   }

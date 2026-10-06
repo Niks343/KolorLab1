@@ -198,6 +198,60 @@ function repositoryPath(env, path = '') {
   return `/repos/${owner}/${repo}/contents/${path}`;
 }
 
+function withActor(request, message) {
+  const actor = request.headers.get('X-Kolorlab-Actor') ?? '';
+  const safeActor = /^[a-zA-Z0-9_-]{1,40}$/.test(actor) ? actor : 'unknown-device';
+  return `${message} [actor:${safeActor}]`;
+}
+
+function safeHistoryPath(value) {
+  if (typeof value !== 'string'
+    || !/^(catalog\/(?:colors|paints)\/[a-zA-Z0-9_-]{1,200}\.json|projects\/client-[a-zA-Z0-9_-]{1,200}\.json)$/.test(value)) {
+    throw new HttpError(400, 'Для истории выберите запись каталога или проект клиента.');
+  }
+  return value;
+}
+
+async function handleHistory(request, env, pathSegments) {
+  await limitByIp(request, env, 'history-read-ip', 120, 3600);
+  await ensurePrivateRepository(env);
+  if (pathSegments.length === 0 && request.method === 'GET') {
+    const url = new URL(request.url);
+    const path = safeHistoryPath(url.searchParams.get('path'));
+    const owner = encodeURIComponent(env.GITHUB_OWNER);
+    const repo = encodeURIComponent(env.GITHUB_REPO);
+    const commits = await githubRequest(env, `/repos/${owner}/${repo}/commits?path=${encodeURIComponent(path)}&per_page=20`);
+    if (!Array.isArray(commits)) throw new HttpError(502, 'Не удалось загрузить историю изменений.');
+    return json({
+      entries: commits.map((item) => {
+        const message = typeof item.commit?.message === 'string' ? item.commit.message : '';
+        const actor = message.match(/\[actor:([a-zA-Z0-9_-]{1,40})\]/)?.[1] ?? '';
+        return {
+          sha: item.sha,
+          date: item.commit?.author?.date ?? item.commit?.committer?.date ?? '',
+          author: item.author?.login ?? item.commit?.author?.name ?? 'Неизвестный автор',
+          actor,
+          action: message.replace(/\s*\[actor:[a-zA-Z0-9_-]{1,40}\]\s*$/, ''),
+        };
+      }),
+    });
+  }
+  if (pathSegments.length === 1 && pathSegments[0] === 'restore' && request.method === 'POST') {
+    await limitByIp(request, env, 'history-restore-ip', 20, 3600);
+    const body = await readJson(request, 2_000);
+    const path = safeHistoryPath(body.path);
+    if (typeof body.sha !== 'string' || !/^[a-f0-9]{40}$/i.test(body.sha)) {
+      throw new HttpError(400, 'Выберите версию из истории.');
+    }
+    const previous = await githubRequest(env, `${repositoryPath(env, path)}?ref=${encodeURIComponent(body.sha)}`, { allowNotFound: true });
+    if (!previous) throw new HttpError(404, 'Выбранная версия записи не найдена.');
+    const value = decodeGithubFile(previous);
+    await updateGithubFile(env, path, value, withActor(request, `history: restore ${path} from ${body.sha.slice(0, 7)}`));
+    return json({ ok: true });
+  }
+  throw new HttpError(405, 'Для истории доступны просмотр и восстановление версии.');
+}
+
 async function ensurePrivateRepository(env) {
   const repository = await githubRequest(env, `/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}`);
   if (repository.private !== true) {
@@ -328,7 +382,7 @@ async function handleCatalog(request, env, pathSegments) {
       ...(kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id)),
       createdAt: new Date().toISOString(),
     };
-    await createGithubFile(env, path, value, `catalog: add ${kind} ${id}`);
+    await createGithubFile(env, path, value, withActor(request, `catalog: add ${kind} ${id}`));
     return json({ ok: true, record: value }, 201);
   }
   if (request.method !== 'PUT' && request.method !== 'DELETE') {
@@ -336,7 +390,7 @@ async function handleCatalog(request, env, pathSegments) {
   }
   await limitByIp(request, env, 'catalog-edit-delete-ip', 60, 3600);
   if (request.method === 'DELETE') {
-    await updateGithubFile(env, path, { id, deleted: true }, `catalog: delete ${kind} ${id}`);
+    await updateGithubFile(env, path, { id, deleted: true }, withActor(request, `catalog: delete ${kind} ${id}`));
     return json({ ok: true });
   }
   const body = await readJson(request);
@@ -345,7 +399,7 @@ async function handleCatalog(request, env, pathSegments) {
     ...(kind === 'colors' ? normalizeColorRecord(body, id) : normalizePaintRecord(body, id)),
     createdAt: existing?.value?.createdAt || new Date().toISOString(),
   };
-  await updateGithubFile(env, path, value, `catalog: update ${kind} ${id}`);
+  await updateGithubFile(env, path, value, withActor(request, `catalog: update ${kind} ${id}`));
   return json({ ok: true, record: value });
 }
 
@@ -464,7 +518,7 @@ async function handleProjects(request, env, pathSegments) {
     .filter((name) => typeof name === 'string' && name.trim())
     .map((name) => name.trim().slice(0, 100)))];
   const value = { clientId, projects, projectNames, updatedAt: new Date().toISOString() };
-  await updateGithubFile(env, `projects/${clientId}.json`, value, `projects: sync ${clientId}`);
+  await updateGithubFile(env, `projects/${clientId}.json`, value, withActor(request, `projects: sync ${clientId}`));
   return json({ ok: true, projectCount: projects.length });
 }
 
@@ -503,8 +557,8 @@ async function handleClients(request, env, pathSegments) {
       pinHash: await requestHash(env, `${id}:${pin}`),
       createdAt: existing?.value?.createdAt || new Date().toISOString(),
     };
-    if (existing) await updateGithubFile(env, path, record, `clients: update ${id}`);
-    else await createGithubFile(env, path, record, `clients: add ${id}`);
+    if (existing) await updateGithubFile(env, path, record, withActor(request, `clients: update ${id}`));
+    else await createGithubFile(env, path, record, withActor(request, `clients: add ${id}`));
     return json({ client: clientSummary(record) }, existing ? 200 : 201);
   }
   if (pathSegments.length === 1 && request.method === 'DELETE') {
@@ -515,8 +569,8 @@ async function handleClients(request, env, pathSegments) {
     const existing = await readGithubFile(env, `clients/${id}.json`);
     if (!clientSummary(existing?.value)) throw new HttpError(404, 'Карточка клиента не найдена.');
     await verifyClientPin(env, existing.value, body.pin);
-    await updateGithubFile(env, `clients/${id}.json`, { id, deleted: true }, `clients: delete ${id}`);
-    await updateGithubFile(env, `projects/${id}.json`, { clientId: id, projects: [], projectNames: [], deleted: true }, `projects: delete ${id}`);
+    await updateGithubFile(env, `clients/${id}.json`, { id, deleted: true }, withActor(request, `clients: delete ${id}`));
+    await updateGithubFile(env, `projects/${id}.json`, { clientId: id, projects: [], projectNames: [], deleted: true }, withActor(request, `projects: delete ${id}`));
     return json({ ok: true });
   }
   throw new HttpError(405, 'Для клиентов доступны просмотр, создание и удаление.');
@@ -530,6 +584,7 @@ async function handleApi(request, env) {
   if (resource === 'catalog') return handleCatalog(request, env, [action, ...tail].filter(Boolean));
   if (resource === 'clients') return handleClients(request, env, [action, ...tail].filter(Boolean));
   if (resource === 'projects') return handleProjects(request, env, [action, ...tail].filter(Boolean));
+  if (resource === 'history') return handleHistory(request, env, [action, ...tail].filter(Boolean));
   throw new HttpError(404, 'Маршрут API не найден.');
 }
 
@@ -542,7 +597,7 @@ export function createWorkerResponse(request, env) {
     ...(allowedOrigins.includes(origin) ? {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Kolorlab-Actor',
       'Access-Control-Max-Age': '86400',
     } : {}),
   };

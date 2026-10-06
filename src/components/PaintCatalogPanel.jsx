@@ -1,14 +1,55 @@
 import { useMemo, useState } from 'react';
-import { Check, Droplets, Paintbrush, Plus, Search } from 'lucide-react';
+import { AlertTriangle, Check, GitCompareArrows, Paintbrush, Plus, Search, Sparkles, X } from 'lucide-react';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintMaterials } from '../data/paintCatalog.js';
 
-export default function PaintCatalogPanel({ products, selectedId, onSelect, onManage }) {
+function normalizedText(value) {
+  return String(value ?? '').toLocaleLowerCase('ru').replace(/[ё]/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+}
+
+function tokenSimilarity(first, second) {
+  const left = new Set(normalizedText(first).split(/\s+/).filter(Boolean));
+  const right = new Set(normalizedText(second).split(/\s+/).filter(Boolean));
+  if (!left.size || !right.size) return 0;
+  const intersection = [...left].filter((token) => right.has(token)).length;
+  return intersection / (left.size + right.size - intersection);
+}
+
+function getCoverage(product) {
+  return Object.values(product.coverageBySurface ?? {}).flat().filter(Number.isFinite);
+}
+
+function getPossibleDuplicates(product, products) {
+  const metadata = getPaintProductMetadata(product);
+  return products.filter((candidate) => {
+    if (candidate.id === product.id || getPaintProductMetadata(candidate).category !== metadata.category) return false;
+    const brandSimilarity = tokenSimilarity(product.brand, candidate.brand);
+    const nameSimilarity = tokenSimilarity(product.name, candidate.name);
+    const exactCombined = normalizedText(`${product.brand} ${product.name}`) === normalizedText(`${candidate.brand} ${candidate.name}`);
+    return exactCombined || (brandSimilarity >= 0.65 && nameSimilarity >= 0.65);
+  });
+}
+
+function materialOverlap(first, second) {
+  const left = first.compatibleMaterials ?? [];
+  const right = second.compatibleMaterials ?? [];
+  return left.filter((material) => right.includes(material));
+}
+
+function getUnitCoverage(product) {
+  const values = getCoverage(product);
+  if (!values.length) return 'Не указано';
+  const unit = getPaintProductMetadata(product).category === 'plaster' ? 'кг/м²' : 'м²/л';
+  return `${Math.min(...values)}–${Math.max(...values)} ${unit}`;
+}
+
+export default function PaintCatalogPanel({ products, selectedId, onSelect, onManage, pricesByProduct = {} }) {
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [applicationFilter, setApplicationFilter] = useState('all');
   const [tintFilter, setTintFilter] = useState('all');
   const [baseFilter, setBaseFilter] = useState('all');
   const [materialFilter, setMaterialFilter] = useState('all');
+  const [comparisonIds, setComparisonIds] = useState([]);
 
   const filteredProducts = useMemo(() => products.filter((product) => {
     const metadata = getPaintProductMetadata(product);
@@ -20,6 +61,35 @@ export default function PaintCatalogPanel({ products, selectedId, onSelect, onMa
       && (baseFilter === 'all' || metadata.tintBases.includes(baseFilter))
       && (materialFilter === 'all' || metadata.compatibleMaterials.includes(materialFilter));
   }), [products, query, categoryFilter, applicationFilter, tintFilter, baseFilter, materialFilter]);
+  const comparedProducts = comparisonIds.map((id) => products.find((product) => product.id === id)).filter(Boolean);
+  const selectedProduct = products.find((product) => product.id === selectedId);
+  const selectedMetadata = selectedProduct ? getPaintProductMetadata(selectedProduct) : null;
+  const selectedIsPrimer = selectedMetadata?.category === 'primer';
+  const systemProductCategories = selectedIsPrimer
+    ? new Set(['interior', 'facade', 'varnish', 'enamel', 'plaster', 'impregnation', 'oil'])
+    : new Set(['primer', 'three-in-one', 'varnish', 'enamel']);
+  const systemCandidates = selectedProduct
+    ? products.filter((product) => {
+      if (product.id === selectedProduct.id) return false;
+      const metadata = getPaintProductMetadata(product);
+      return systemProductCategories.has(metadata.category);
+    })
+    : [];
+  const productRecommendations = selectedMetadata?.compatibleMaterials.length
+    ? systemCandidates.filter((product) => materialOverlap(selectedMetadata, getPaintProductMetadata(product)).length > 0)
+    : [];
+  const incompatibleSystemCandidates = selectedMetadata?.compatibleMaterials.length
+    ? systemCandidates.filter((product) => {
+      const materials = getPaintProductMetadata(product).compatibleMaterials;
+      return materials.length > 0 && materialOverlap(selectedMetadata, { compatibleMaterials: materials }).length === 0;
+    })
+    : [];
+
+  const toggleComparison = (id) => {
+    setComparisonIds((ids) => ids.includes(id)
+      ? ids.filter((item) => item !== id)
+      : ids.length < 3 ? [...ids, id] : ids);
+  };
 
   return <section className="dashboard-paint-catalog panel min-h-0 p-4 sm:p-5" aria-label="Каталог красок">
     <header className="mb-4 flex items-start justify-between gap-3">
@@ -59,11 +129,53 @@ export default function PaintCatalogPanel({ products, selectedId, onSelect, onMa
     </div>
 
     <div className="mb-3 text-[10px] text-slate-500">Найдено: {filteredProducts.length}</div>
+    {comparedProducts.length > 0 && <section className="mb-4 overflow-hidden rounded-xl border border-[var(--primary-500)]/30 bg-[var(--primary-900)]/10" aria-label="Сравнение красок">
+      <div className="flex items-center justify-between gap-2 border-b border-white/5 px-3 py-2">
+        <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-200"><GitCompareArrows size={14} />Сравнение · {comparedProducts.length}/3</div>
+        <button type="button" onClick={() => setComparisonIds([])} className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-white"><X size={12} />Очистить</button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-left text-[10px]">
+          <tbody>
+            {[
+              ['Материал', (product) => `${product.brand} · ${product.name}`],
+              ['Расход', getUnitCoverage],
+              ['Цена за единицу', (product) => {
+                const price = pricesByProduct[product.id] ?? product.pricePerUnit ?? product.pricePerLiter;
+                return Number.isFinite(price) ? `${price.toLocaleString('ru-RU')} ₽/${product.quantityUnit === 'kg' ? 'кг' : 'л'}` : 'Не указана';
+              }],
+              ['Фасовки', (product) => {
+                const packages = [...(product.packageSizesLiters ?? []), ...(product.packageSizesKg ?? [])];
+                return packages.length ? `${packages.join(', ')} ${product.quantityUnit === 'kg' ? 'кг' : 'л'}` : 'Не указаны';
+              }],
+              ['Назначение', (product) => product.purpose || 'Не указано'],
+              ['Поверхности', (product) => {
+                const ids = getPaintProductMetadata(product).compatibleMaterials;
+                return ids.length ? ids.map((id) => paintMaterials.find((item) => item.id === id)?.label).filter(Boolean).join(', ') : 'Не указаны';
+              }],
+            ].map(([label, getValue]) => <tr key={label} className="border-b border-white/5 last:border-0">
+              <th className="w-32 px-3 py-2 font-medium text-slate-500">{label}</th>
+              {comparedProducts.map((product) => <td key={`${label}-${product.id}`} className="min-w-44 px-3 py-2 text-slate-300">{getValue(product)}</td>)}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </section>}
+    {selectedProduct && <section className="mb-4 rounded-xl border border-[#2b323c] bg-[#0d1117] p-3" aria-label="Совместимая система материалов">
+      <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-200"><Sparkles size={14} className="text-[var(--primary-300)]" />Рекомендации по системе материалов</div>
+      <p className="mt-1 text-[9px] leading-relaxed text-slate-500">Сопоставление выполнено по совместимым поверхностям, указанным в карточках. Перед нанесением проверьте технические листы производителей.</p>
+      {productRecommendations.length
+        ? <div className="mt-2 flex flex-wrap gap-1.5">{productRecommendations.slice(0, 4).map((product) => <button key={product.id} type="button" onClick={() => onSelect(product)} className="rounded-lg border border-[#343d48] px-2.5 py-1.5 text-left text-[9px] text-slate-300 hover:border-[var(--primary-400)]">{getPaintProductMetadata(product).category === 'primer' ? 'Грунт' : 'Совместимый материал'} · {product.brand} {product.name}</button>)}</div>
+        : <div className="mt-2 flex items-start gap-1.5 text-[9px] text-amber-200/80"><AlertTriangle size={12} className="mt-0.5 shrink-0" />Недостаточно данных о совместимых поверхностях, чтобы подтвердить подходящую систему.</div>}
+      {incompatibleSystemCandidates.length > 0 && <p className="mt-2 text-[9px] leading-relaxed text-amber-200/70">Не включены в рекомендации из-за несовпадения поверхностей: {incompatibleSystemCandidates.slice(0, 3).map((product) => `${product.brand} ${product.name}`).join(', ')}.</p>}
+    </section>}
     <div className="grid gap-2 sm:grid-cols-2">
       {filteredProducts.map((product) => {
         const metadata = getPaintProductMetadata(product);
         const category = paintCategories.find((item) => item.id === metadata.category);
         const active = product.id === selectedId;
+        const selectedForCompare = comparisonIds.includes(product.id);
+        const duplicates = getPossibleDuplicates(product, products);
         const tags = [
           ...metadata.applications.map((id) => paintApplications.find((item) => item.id === id)?.label),
           metadata.tintable === true ? 'Колеруется' : metadata.tintable === false ? 'Не колеруется' : null,
@@ -80,11 +192,15 @@ export default function PaintCatalogPanel({ products, selectedId, onSelect, onMa
           </div>
           {product.finish && <p className="mt-1 text-[10px] text-slate-400">{product.finish}</p>}
           {product.purpose && <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{product.purpose}</p>}
+          {duplicates.length > 0 && <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5 text-[9px] leading-relaxed text-amber-200/90"><AlertTriangle size={11} className="mt-0.5 shrink-0" /><span>Возможный дубликат: {duplicates.slice(0, 2).map((item) => `${item.brand} · ${item.name}`).join('; ')}. Проверьте вручную.</span></div>}
           {tags.length > 0
             ? <div className="mt-2 flex flex-wrap gap-1">{tags.map((tag) => <span key={tag} className="rounded-full border border-[#343d48] px-2 py-0.5 text-[9px] text-slate-400">{tag}</span>)}</div>
             : <p className="mt-2 text-[9px] text-slate-600">Свойства пока не указаны</p>}
           <button type="button" onClick={() => onSelect(product)} className={`mt-3 w-full rounded-lg px-3 py-2 text-[10px] font-semibold ${active ? 'accent-surface text-[var(--primary-100)]' : 'btn-secondary'}`}>
             {active ? 'Выбрана для расчёта' : 'Выбрать для расчёта'}
+          </button>
+          <button type="button" onClick={() => toggleComparison(product.id)} disabled={!selectedForCompare && comparisonIds.length >= 3} className={`mt-1.5 w-full rounded-lg border px-3 py-2 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${selectedForCompare ? 'border-[var(--primary-400)] text-[var(--primary-200)]' : 'border-[#343d48] text-slate-400 hover:text-slate-200'}`}>
+            <span className="inline-flex items-center gap-1.5"><GitCompareArrows size={12} />{selectedForCompare ? 'Убрать из сравнения' : 'Сравнить'}</span>
           </button>
         </article>;
       })}
