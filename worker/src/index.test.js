@@ -359,12 +359,18 @@ test('public catalog edits overlay built-in records and deletes them with tombst
 
 test('rate-limits anonymous catalog submissions by IP', async () => {
   const storage = new Map();
+  const keyOptions = [];
   const env = createEnv({
     AUTH_KV: {
       async get(key) { return storage.get(key) ?? null; },
-      async put(key, value) { storage.set(key, value); },
+      async put(key, value, options) {
+        storage.set(key, value);
+        keyOptions.push({ key, options });
+      },
     },
   });
+  const legacyIpHash = createHmac('sha256', env.SESSION_SECRET).update('192.0.2.3').digest('base64url');
+  storage.set(`catalog-create-ip:${legacyIpHash}`, '10');
   const originalFetch = globalThis.fetch;
   let githubWrites = 0;
   globalThis.fetch = async (url, init = {}) => {
@@ -392,7 +398,77 @@ test('rate-limits anonymous catalog submissions by IP', async () => {
       body: JSON.stringify({ id: 'custom-color-over-limit', code: 'D-X', name_ru: 'Лишняя запись', hex: '#AABBCC' }),
     }), env);
     assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('Retry-After')) > 0);
+    assert.match((await response.json()).error, /примерно через/);
     assert.equal(githubWrites, 10);
+    assert.equal(storage.get(`catalog-create-ip:${legacyIpHash}`), '10');
+    assert.ok(keyOptions.every(({ key }) => key.startsWith('rate-v2:')));
+    assert.ok(keyOptions.every(({ options }) => options.expirationTtl > 0));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('returns GitHub rate-limit reset information to the client', async () => {
+  const env = createEnv();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    return Response.json({
+      message: 'API rate limit exceeded for user ID 1.',
+    }, {
+      status: 403,
+      headers: { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 900) },
+    });
+  };
+  try {
+    const response = await createWorkerResponse(new Request('https://kolorlab-api.test/api/clients'), env);
+    assert.equal(response.status, 429);
+    assert.ok(Number(response.headers.get('Retry-After')) > 0);
+    assert.match((await response.json()).error, /GitHub временно ограничил доступ/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('caches catalog record reads briefly to reduce GitHub API usage', async () => {
+  const env = createEnv();
+  const originalFetch = globalThis.fetch;
+  let fileReads = 0;
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === '/repos/owner/private-data') return Response.json({ private: true });
+    if (parsed.pathname.endsWith('/contents/catalog/colors')) {
+      return Response.json([{
+        type: 'file',
+        name: 'cache-test-color-one.json',
+        path: 'catalog/colors/cache-test-color-one.json',
+      }]);
+    }
+    if (parsed.pathname.endsWith('/contents/catalog/colors/cache-test-color-one.json')) {
+      fileReads += 1;
+      return Response.json({
+        sha: 'color-sha',
+        content: Buffer.from(JSON.stringify({
+          id: 'cache-test-color-one',
+          code: 'D-01',
+          name_ru: 'Тёплый камень',
+          hex: '#AABBCC',
+        })).toString('base64'),
+      });
+    }
+    assert.fail(`Unexpected GitHub request: ${parsed.href}`);
+  };
+  try {
+    for (let index = 0; index < 2; index += 1) {
+      const response = await createWorkerResponse(new Request(
+        `https://kolorlab-api.test/api/catalog?type=colors&offset=0&run=${index}`,
+      ), env);
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).entries[0].id, 'cache-test-color-one');
+    }
+    assert.equal(fileReads, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -2,11 +2,13 @@ const allowedSurfaces = new Set(['wall', 'plaster', 'bath', 'facade']);
 const allowedPaintCategories = new Set(['facade', 'interior', 'plaster', 'three-in-one', 'primer', 'impregnation', 'varnish', 'enamel', 'oil']);
 const allowedPaintApplications = new Set(['facade', 'interior', 'terrace', 'bath', 'metal']);
 const allowedPaintMaterials = new Set(['mineral', 'wallpaper', 'metal', 'radiator', 'plastic', 'wood', 'doors', 'windows', 'slopes']);
+const githubReadCache = new Map();
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, headers = {}) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }
 
@@ -147,15 +149,29 @@ function githubHeaders(env) {
 }
 
 async function githubRequest(env, path, init = {}) {
-  const readRequest = !init.method || init.method === 'GET';
+  const { cacheTtlSeconds = 0, ...requestInit } = init;
+  const readRequest = !requestInit.method || requestInit.method === 'GET';
+  const cacheKey = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}:${path}`;
+  if (readRequest && cacheTtlSeconds > 0) {
+    try {
+      const cached = githubReadCache.get(cacheKey);
+      if (cached?.expiresAt > Date.now()) return JSON.parse(cached.body);
+      if (cached) githubReadCache.delete(cacheKey);
+    } catch (error) {
+      console.warn('Не удалось прочитать локальный кэш GitHub; запрашиваем свежие данные.', {
+        path,
+        errorName: error instanceof Error ? error.name : 'Unknown',
+      });
+    }
+  }
   const maxAttempts = readRequest ? 3 : 1;
   let response = null;
   let transportError = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       response = await fetch(`https://api.github.com${path}`, {
-        ...init,
-        headers: { ...githubHeaders(env), ...init.headers },
+        ...requestInit,
+        headers: { ...githubHeaders(env), ...requestInit.headers },
       });
       break;
     } catch (error) {
@@ -184,14 +200,44 @@ async function githubRequest(env, path, init = {}) {
   if (response.status === 422 && init.createOnly) {
     throw new HttpError(409, 'Запись с таким идентификатором уже существует.');
   }
+  if (response.status === 403 && result?.message?.includes('API rate limit exceeded')) {
+    const resetAt = Number(response.headers.get('x-ratelimit-reset'));
+    const retryAfter = Number.isFinite(resetAt)
+      ? Math.max(1, resetAt - Math.floor(Date.now() / 1000))
+      : 3600;
+    throw new HttpError(429, `GitHub временно ограничил доступ к общей базе. Повторите примерно через ${Math.ceil(retryAfter / 60)} мин.`, {
+      'Retry-After': String(retryAfter),
+    });
+  }
   if (!response.ok) {
     console.error('GitHub API request failed.', {
       status: response.status,
+      rateLimitReset: response.headers.get('x-ratelimit-reset'),
       requestId: response.headers.get('x-github-request-id'),
       contentType: response.headers.get('content-type'),
       message: result?.message ?? responseBody.slice(0, 500),
     });
     throw new HttpError(502, 'Не удалось сохранить данные в защищённой базе GitHub.');
+  }
+  if (readRequest && cacheTtlSeconds > 0 && response.status === 200) {
+    try {
+      githubReadCache.set(cacheKey, {
+        body: responseBody,
+        expiresAt: Date.now() + Math.floor(cacheTtlSeconds) * 1000,
+      });
+      if (githubReadCache.size > 1_000) {
+        const oldestKey = githubReadCache.keys().next().value;
+        if (oldestKey) githubReadCache.delete(oldestKey);
+      }
+    } catch (error) {
+      console.warn('Не удалось обновить локальный кэш GitHub.', {
+        path,
+        errorName: error instanceof Error ? error.name : 'Unknown',
+      });
+    }
+  }
+  if (!readRequest && response.ok) {
+    githubReadCache.delete(cacheKey);
   }
   return result;
 }
@@ -217,7 +263,7 @@ function safeHistoryPath(value) {
 }
 
 async function handleHistory(request, env, pathSegments) {
-  await limitByIp(request, env, 'history-read-ip', 120, 3600);
+  await limitByIp(request, env, 'history-read-ip', 600, 3600);
   await ensurePrivateRepository(env);
   if (pathSegments.length === 0 && request.method === 'GET') {
     const url = new URL(request.url);
@@ -241,7 +287,7 @@ async function handleHistory(request, env, pathSegments) {
     });
   }
   if (pathSegments.length === 1 && pathSegments[0] === 'restore' && request.method === 'POST') {
-    await limitByIp(request, env, 'history-restore-ip', 20, 3600);
+    await limitByIp(request, env, 'history-restore-ip', 60, 3600);
     const body = await readJson(request, 2_000);
     const path = safeHistoryPath(body.path);
     if (typeof body.sha !== 'string' || !/^[a-f0-9]{40}$/i.test(body.sha)) {
@@ -325,7 +371,7 @@ async function listGithubDirectory(env, path) {
   const records = [];
   for (let index = 0; index < files.length; index += 6) {
     const batch = await Promise.all(files.slice(index, index + 6).map(async (entry) => (
-      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))
+      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path), { cacheTtlSeconds: 60 }))
     )));
     records.push(...batch);
   }
@@ -341,7 +387,7 @@ async function readGithubDirectoryPage(env, path, offset, limit) {
   const records = [];
   for (let index = 0; index < page.length; index += 6) {
     const batch = await Promise.all(page.slice(index, index + 6).map(async (entry) => (
-      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path)))
+      decodeGithubFile(await githubRequest(env, repositoryPath(env, entry.path), { cacheTtlSeconds: 60 }))
     )));
     records.push(...batch);
   }
@@ -350,9 +396,19 @@ async function readGithubDirectoryPage(env, path, offset, limit) {
 }
 
 async function allowRequest(env, key, limit, ttlSeconds) {
-  const count = Number(await env.AUTH_KV.get(key) ?? 0);
-  if (count >= limit) throw new HttpError(429, 'Слишком много запросов. Повторите позже.');
-  await env.AUTH_KV.put(key, String(count + 1), { expirationTtl: ttlSeconds });
+  const now = Math.floor(Date.now() / 1000);
+  const windowSeconds = Math.max(1, Math.floor(ttlSeconds));
+  const windowId = Math.floor(now / windowSeconds);
+  const windowEnd = (windowId + 1) * windowSeconds;
+  const windowKey = `rate-v2:${key}:${windowId}`;
+  const count = Number(await env.AUTH_KV.get(windowKey) ?? 0);
+  if (count >= limit) {
+    const retryAfter = Math.max(1, windowEnd - now);
+    throw new HttpError(429, `Лимит запросов исчерпан. Попробуйте снова примерно через ${Math.ceil(retryAfter / 60)} мин.`, {
+      'Retry-After': String(retryAfter),
+    });
+  }
+  await env.AUTH_KV.put(windowKey, String(count + 1), { expirationTtl: windowEnd - now + 60 });
 }
 
 async function limitByIp(request, env, keyPrefix, limit, ttlSeconds) {
@@ -363,7 +419,7 @@ async function limitByIp(request, env, keyPrefix, limit, ttlSeconds) {
 
 async function handleCatalog(request, env, pathSegments) {
   if (request.method === 'GET' && pathSegments.length === 0) {
-    await limitByIp(request, env, 'catalog-read-ip', 600, 3600);
+    await limitByIp(request, env, 'catalog-read-ip', 1200, 3600);
     const url = new URL(request.url);
     const type = url.searchParams.get('type');
     const directory = type === 'colors' ? 'catalog/colors' : type === 'paints' ? 'catalog/paints' : null;
@@ -398,7 +454,7 @@ async function handleCatalog(request, env, pathSegments) {
   if (request.method !== 'PUT' && request.method !== 'DELETE') {
     throw new HttpError(405, 'Для этой записи разрешено добавление, редактирование и удаление.');
   }
-  await limitByIp(request, env, 'catalog-edit-delete-ip', 60, 3600);
+  await limitByIp(request, env, 'catalog-edit-delete-ip', 120, 3600);
   if (request.method === 'DELETE') {
     await updateGithubFile(env, path, { id, deleted: true }, withActor(request, `catalog: delete ${kind} ${id}`));
     return json({ ok: true });
@@ -488,7 +544,7 @@ function normalizeSharedProject(value, clientId) {
 
 async function handleProjects(request, env, pathSegments) {
   if (request.method === 'GET' && pathSegments.length === 0) {
-    await limitByIp(request, env, 'projects-read-ip', 120, 3600);
+    await limitByIp(request, env, 'projects-read-ip', 600, 3600);
     await ensurePrivateRepository(env);
     const [records, clientRecords] = await Promise.all([
       listGithubDirectory(env, 'projects'),
@@ -510,7 +566,7 @@ async function handleProjects(request, env, pathSegments) {
   if (request.method !== 'PUT' || pathSegments.length !== 1) {
     throw new HttpError(405, 'Для проектов доступны просмотр и сохранение.');
   }
-  await limitByIp(request, env, 'projects-write-ip', 120, 3600);
+  await limitByIp(request, env, 'projects-write-ip', 600, 3600);
   const clientId = safeId(decodeURIComponent(pathSegments[0]));
   if (!clientId.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
   const body = await readJson(request, 300_000);
@@ -535,13 +591,13 @@ async function handleProjects(request, env, pathSegments) {
 
 async function handleClients(request, env, pathSegments) {
   if (request.method === 'GET' && pathSegments.length === 0) {
-    await limitByIp(request, env, 'clients-read-ip', 120, 3600);
+    await limitByIp(request, env, 'clients-read-ip', 600, 3600);
     await ensurePrivateRepository(env);
     const records = await listGithubDirectory(env, 'clients');
     return json({ clients: records.map(clientSummary).filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
   }
   if (pathSegments.length === 0 && request.method === 'PUT') {
-    await limitByIp(request, env, 'clients-write-ip', 10, 3600);
+    await limitByIp(request, env, 'clients-write-ip', 20, 3600);
     const body = await readJson(request, 4_000);
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const phone = typeof body.phone === 'string' ? body.phone.replace(/\D/g, '') : '';
@@ -573,7 +629,7 @@ async function handleClients(request, env, pathSegments) {
     return json({ client: clientSummary(record) }, existing ? 200 : 201);
   }
   if (pathSegments.length === 1 && request.method === 'DELETE') {
-    await limitByIp(request, env, 'clients-delete-ip', 20, 3600);
+    await limitByIp(request, env, 'clients-delete-ip', 60, 3600);
     const id = safeId(decodeURIComponent(pathSegments[0]));
     if (!id.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
     const body = await readJson(request, 2_000);
@@ -585,7 +641,7 @@ async function handleClients(request, env, pathSegments) {
     return json({ ok: true });
   }
   if (pathSegments.length === 2 && pathSegments[1] === 'verify-pin' && request.method === 'POST') {
-    await limitByIp(request, env, 'client-pin-verify-ip', 30, 3600);
+    await limitByIp(request, env, 'client-pin-verify-ip', 300, 3600);
     const id = safeId(decodeURIComponent(pathSegments[0]));
     if (!id.startsWith('client-')) throw new HttpError(400, 'Некорректный идентификатор клиента.');
     const body = await readJson(request, 2_000);
@@ -632,7 +688,10 @@ export function createWorkerResponse(request, env) {
     })
     .catch((error) => {
       if (!(error instanceof HttpError)) console.error('Unhandled KolorLab API error.', error);
-      return json({ error: error instanceof HttpError ? error.message : 'Внутренняя ошибка сервера.' }, error instanceof HttpError ? error.status : 500, corsHeaders);
+      return json({ error: error instanceof HttpError ? error.message : 'Внутренняя ошибка сервера.' }, error instanceof HttpError ? error.status : 500, {
+        ...corsHeaders,
+        ...(error instanceof HttpError ? error.headers : {}),
+      });
     });
 }
 
