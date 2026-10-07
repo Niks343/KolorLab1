@@ -49,6 +49,7 @@ test('validates custom color and paint records', () => {
     tintable: false,
     tintBases: ['A'],
     compatibleMaterials: ['wood', 'mineral', 'wallpaper', 'radiator', 'unknown'],
+    recommendedProductIds: ['primer-one', 'primer-one', 'invalid id', 3],
   }, 'custom-paint-one');
   assert.equal(normalizedPaint.pricePerUnit, 800);
   assert.equal(normalizedPaint.paintCategory, 'varnish');
@@ -56,6 +57,7 @@ test('validates custom color and paint records', () => {
   assert.equal(normalizedPaint.tintable, false);
   assert.deepEqual(normalizedPaint.tintBases, []);
   assert.deepEqual(normalizedPaint.compatibleMaterials, ['wood', 'mineral', 'wallpaper', 'radiator']);
+  assert.deepEqual(normalizedPaint.recommendedProductIds, ['primer-one']);
 });
 
 test('normalizes plaster quantity in kilograms and retains the metal application', () => {

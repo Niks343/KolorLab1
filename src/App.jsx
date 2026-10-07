@@ -76,7 +76,7 @@ function sharedProjectsSnapshot(projects, projectNames, clientId) {
         const paintProductFields = [
           'id', 'brand', 'name', 'finish', 'purpose', 'coverageBySurface', 'coverageDescription',
           'baseSystem', 'baseSystemByTintBase', 'packageSizesLiters', 'packageSizesKg', 'quantityUnit',
-          'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials',
+          'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials', 'recommendedProductIds',
           'availabilityNote', 'pricePerUnit', 'pricePerLiter', 'source', 'custom',
         ];
         const paintProduct = project.paintProduct && typeof project.paintProduct === 'object'
@@ -555,7 +555,7 @@ function App() {
   const [customEntryType, setCustomEntryType] = useState('');
   const [editingCatalogEntry, setEditingCatalogEntry] = useState(null);
   const [customColorDraft, setCustomColorDraft] = useState({ code: '', name: '', hex: '#71806A' });
-  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
+  const [customPaintDraft, setCustomPaintDraft] = useState({ brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], recommendedProductIds: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
   const cameraVideoRef = useRef(null);
   const cameraCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
@@ -1221,6 +1221,7 @@ function App() {
         applications: [...metadata.applications],
         tintable: metadata.tintable,
         compatibleMaterials: [...metadata.compatibleMaterials],
+        recommendedProductIds: [...(entry.recommendedProductIds ?? [])],
         coverage: String(firstCoverage),
         packages: (entry.quantityUnit === 'kg' ? entry.packageSizesKg : entry.packageSizesLiters)?.join(', ') ?? '',
         finish: entry.finish === 'Не указано' ? 'Матовая' : entry.finish,
@@ -1229,7 +1230,7 @@ function App() {
         surfaces: [...entry.surfaces],
         tintBases: [...metadata.tintBases],
         pricePerUnit: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
-      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
+      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], recommendedProductIds: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
     }
     setCatalogManagerOpen(false);
     setCatalogManagerType(type === 'color' ? 'colors' : 'paints');
@@ -1348,6 +1349,7 @@ function App() {
       applications: customPaintDraft.applications,
       tintable: customPaintDraft.tintable,
       compatibleMaterials: customPaintDraft.compatibleMaterials,
+      recommendedProductIds: customPaintDraft.recommendedProductIds,
     });
     if (!product) {
       setToast('Не удалось проверить параметры краски. Проверьте поля и попробуйте снова.');
@@ -2454,6 +2456,27 @@ function App() {
                 <input type="checkbox" checked={customPaintDraft.compatibleMaterials.includes(item.id)} onChange={(event) => setCustomPaintDraft((draft) => ({ ...draft, compatibleMaterials: event.target.checked ? [...new Set([...draft.compatibleMaterials, item.id])] : draft.compatibleMaterials.filter((id) => id !== item.id) }))} className="accent-[var(--primary-400)]" />
                 {item.label}
               </label>)}</div>
+            </fieldset>
+            <fieldset className="rounded-xl border border-[#2b323c] bg-[#0c1015] p-3">
+              <legend className="px-1 text-[10px] font-semibold text-slate-400">Рекомендации по системе материалов</legend>
+              <p className="mb-2 text-[9px] leading-relaxed text-slate-500">Выберите материалы, которые следует использовать вместе с этой краской. Рекомендации задаются вручную и показываются в карточке продукта.</p>
+              <div className="max-h-44 space-y-1 overflow-y-auto">
+                {availablePaintProducts.filter((product) => product.id !== editingCatalogEntry?.id).map((product) => {
+                  const checked = customPaintDraft.recommendedProductIds.includes(product.id);
+                  const disabled = !checked && customPaintDraft.recommendedProductIds.length >= 50;
+                  return <label key={product.id} className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-[10px] ${disabled ? 'text-slate-600' : 'text-slate-300'}`}>
+                    <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => setCustomPaintDraft((draft) => ({
+                      ...draft,
+                      recommendedProductIds: event.target.checked
+                        ? [...new Set([...draft.recommendedProductIds, product.id])].slice(0, 50)
+                        : draft.recommendedProductIds.filter((id) => id !== product.id),
+                    }))} className="mt-0.5 accent-[var(--primary-400)]" />
+                    <span>{product.brand} · {product.name}</span>
+                  </label>;
+                })}
+                {!availablePaintProducts.some((product) => product.id !== editingCatalogEntry?.id) && <p className="px-2 py-2 text-[9px] text-slate-500">Сначала добавьте другие материалы в каталог.</p>}
+              </div>
+              <p className="mt-2 text-[9px] text-slate-500">Выбрано: {customPaintDraft.recommendedProductIds.length} / 50</p>
             </fieldset>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-[10px] font-semibold text-slate-400">{customPaintDraft.category === 'plaster' ? 'Расход штукатурки, кг/м²' : 'Расход, м²/л'}

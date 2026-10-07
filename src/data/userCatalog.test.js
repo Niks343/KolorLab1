@@ -26,6 +26,7 @@ const customPaint = normalizeCustomPaintProduct({
   tintable: true,
   tintBases: ['A', 'C'],
   compatibleMaterials: ['doors', 'windows'],
+  recommendedProductIds: ['primer-one', 'primer-one', 'invalid id'],
 });
 
 test('round-trips a portable user catalog and paint pricing', () => {
@@ -41,6 +42,7 @@ test('round-trips a portable user catalog and paint pricing', () => {
   assert.equal(imported.paintProducts[0].tintable, true);
   assert.deepEqual(imported.paintProducts[0].tintBases, ['A', 'C']);
   assert.deepEqual(imported.paintProducts[0].compatibleMaterials, ['doors', 'windows']);
+  assert.deepEqual(imported.paintProducts[0].recommendedProductIds, ['primer-one']);
   assert.equal(imported.paintPricesByProduct[customPaint.id], 123.5);
   assert.equal(imported.invalidCount, 0);
 });
@@ -97,6 +99,17 @@ test('retains mineral surfaces, wallpaper, radiators, and sheen in portable pain
   const portable = parseCustomCatalogDocument(createCustomCatalogDocument([], [mineralPaint]));
   assert.equal(portable.paintProducts[0].finish, 'Полуглянцевая');
   assert.deepEqual(portable.paintProducts[0].compatibleMaterials, ['mineral', 'wallpaper', 'radiator']);
+});
+
+test('normalizes manual paint system recommendations and keeps them in portable exports', () => {
+  const paint = normalizeCustomPaintProduct({
+    ...customPaint,
+    recommendedProductIds: ['primer-one', 'primer-one', 'topcoat-two', '', 42],
+  });
+  assert.deepEqual(paint.recommendedProductIds, ['primer-one', 'topcoat-two']);
+
+  const imported = parseCustomCatalogDocument(createCustomCatalogDocument([], [paint]));
+  assert.deepEqual(imported.paintProducts[0].recommendedProductIds, ['primer-one', 'topcoat-two']);
 });
 
 test('lists supported paint sheen choices', () => {

@@ -74,6 +74,9 @@ function normalizePaintRecord(value, id) {
   const compatibleMaterials = Array.isArray(value.compatibleMaterials)
     ? [...new Set(value.compatibleMaterials.filter((item) => allowedPaintMaterials.has(item)))]
     : [];
+  const recommendedProductIds = Array.isArray(value.recommendedProductIds)
+    ? [...new Set(value.recommendedProductIds.filter((item) => typeof item === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(item)))].slice(0, 50)
+    : [];
   return {
     id,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
@@ -92,6 +95,7 @@ function normalizePaintRecord(value, id) {
     applications,
     tintable,
     compatibleMaterials,
+    recommendedProductIds,
     pricePerUnit: Number.isFinite(value.pricePerUnit ?? value.pricePerLiter) && (value.pricePerUnit ?? value.pricePerLiter) >= 0 && (value.pricePerUnit ?? value.pricePerLiter) <= 1_000_000
       ? value.pricePerUnit ?? value.pricePerLiter
       : null,
@@ -460,7 +464,7 @@ function normalizeSharedProject(value, clientId) {
     ? Object.fromEntries([
       'id', 'brand', 'name', 'finish', 'purpose', 'coverageBySurface', 'coverageDescription',
       'baseSystem', 'baseSystemByTintBase', 'packageSizesLiters', 'packageSizesKg', 'quantityUnit',
-      'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials',
+      'tintBases', 'paintCategory', 'applications', 'tintable', 'compatibleMaterials', 'recommendedProductIds',
       'availabilityNote', 'pricePerUnit', 'pricePerLiter', 'source', 'custom',
     ].filter((key) => key in value.paintProduct).map((key) => [key, value.paintProduct[key]]))
     : null;

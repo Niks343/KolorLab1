@@ -66,6 +66,9 @@ export function normalizeCustomPaintProduct(entry) {
   const compatibleMaterials = Array.isArray(entry.compatibleMaterials)
     ? [...new Set(entry.compatibleMaterials.filter((id) => paintMaterials.some((item) => item.id === id)))]
     : [];
+  const recommendedProductIds = Array.isArray(entry.recommendedProductIds)
+    ? [...new Set(entry.recommendedProductIds.filter((id) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)))].slice(0, 50)
+    : [];
   return {
     id: entry.id,
     createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : '',
@@ -85,6 +88,7 @@ export function normalizeCustomPaintProduct(entry) {
     applications,
     tintable,
     compatibleMaterials,
+    recommendedProductIds,
     source: '',
     custom: true,
   };
@@ -113,6 +117,7 @@ export function createCustomCatalogDocument(customColors, customPaintProducts, p
       applications: product.applications,
       tintable: product.tintable,
       compatibleMaterials: product.compatibleMaterials,
+      recommendedProductIds: product.recommendedProductIds,
       pricePerUnit: Number.isFinite(paintPricesByProduct[product.id]) ? paintPricesByProduct[product.id] : null,
     })),
   };
