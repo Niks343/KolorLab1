@@ -40,8 +40,12 @@ export default function CatalogManagementDialog({
       .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
       .filter((paint) => !query || `${paint.brand} ${paint.name} ${paint.purpose} ${paint.id}`.toLocaleLowerCase('ru').includes(query));
   }, [paints, paintQuery]);
+  const visiblePaintCatalog = useMemo(
+    () => filteredPaints.filter((paint) => view !== 'primers' || getPaintProductMetadata(paint).category === 'primer'),
+    [filteredPaints, view],
+  );
   useEffect(() => setVisibleColorsCount(40), [colorQuery]);
-  useEffect(() => setVisiblePaintsCount(40), [paintQuery]);
+  useEffect(() => setVisiblePaintsCount(40), [paintQuery, view]);
   if (!open) return null;
 
   return <div className="fixed inset-0 z-[85] flex items-center justify-center overflow-y-auto bg-black/70 p-3 backdrop-blur-sm sm:p-6" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -49,7 +53,7 @@ export default function CatalogManagementDialog({
       <div className="flex items-start justify-between gap-3 border-b border-[#252b33] p-4 sm:p-5">
         <div>
           <div className="eyebrow flex items-center gap-2"><ShieldCheck size={13} className="text-emerald-300" />ОБЩАЯ БАЗА · СОХРАНЕНИЕ В GITHUB</div>
-          <h2 id="catalog-management-title" className="mt-1 font-['Manrope'] text-lg font-bold">{view === 'colors' ? 'Каталог цветов' : 'Каталог красок'}</h2>
+          <h2 id="catalog-management-title" className="mt-1 font-['Manrope'] text-lg font-bold">{view === 'colors' ? 'Каталог цветов' : view === 'primers' ? 'Каталог грунтов' : 'Каталог красок'}</h2>
           <p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и записи, добавленные посетителями.</p>
         </div>
         <button type="button" onClick={onClose} aria-label="Закрыть управление базой" className="icon-button h-9 w-9 shrink-0 rounded-lg text-slate-400"><X size={17} /></button>
@@ -70,17 +74,17 @@ export default function CatalogManagementDialog({
           </div>
           {filteredColors.length > visibleColorsCount && <button type="button" onClick={() => setVisibleColorsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visibleColorsCount} из {filteredColors.length}</button>}
         </section>}
-        {view === 'paints' && <section>
+        {(view === 'paints' || view === 'primers') && <section>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div><h3 className="text-xs font-bold">Краски <span className="text-slate-500">· {paints.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и добавленные посетителями.</p></div>
-            <button type="button" onClick={onAddPaint} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">Добавить краску</button>
+            <div><h3 className="text-xs font-bold">{view === 'primers' ? 'Грунты' : 'Краски'} <span className="text-slate-500">· {visiblePaintCatalog.length}</span></h3><p className="mt-1 text-[10px] text-slate-500">Встроенные каталоги и записи общей базы.</p></div>
+            <button type="button" onClick={onAddPaint} className="btn-primary rounded-lg px-3 py-2 text-[10px] font-bold">{view === 'primers' ? 'Добавить грунт' : 'Добавить краску'}</button>
           </div>
           <label className="relative mb-2 block">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input value={paintQuery} onChange={(event) => setPaintQuery(event.target.value)} placeholder="Найти по бренду или названию" aria-label="Поиск краски для управления" className="field w-full rounded-lg py-2 pl-9 pr-3 text-[10px]" />
+            <input value={paintQuery} onChange={(event) => setPaintQuery(event.target.value)} placeholder={view === 'primers' ? 'Найти грунт по бренду или названию' : 'Найти по бренду или названию'} aria-label={view === 'primers' ? 'Поиск грунта для управления' : 'Поиск краски для управления'} className="field w-full rounded-lg py-2 pl-9 pr-3 text-[10px]" />
           </label>
           <div className="grid gap-2">
-            {filteredPaints.slice(0, visiblePaintsCount).map((paint) => {
+            {visiblePaintCatalog.slice(0, visiblePaintsCount).map((paint) => {
               const metadata = getPaintProductMetadata(paint);
               const category = paintCategories.find((item) => item.id === metadata.category)?.label ?? 'Краска';
               const applications = metadata.applications.map((id) => paintApplications.find((item) => item.id === id)?.label).filter(Boolean);
@@ -90,9 +94,9 @@ export default function CatalogManagementDialog({
                 : metadata.tintable === false ? 'Не колеруется' : 'Колеровка не указана';
               return <RecordRow key={paint.id} title={`${paint.brand} · ${paint.name}`} subtitle={[category, applications.join(', '), tinting, materials.join(', '), paint.coverageDescription].filter(Boolean).join(' · ')} actions={<RecordActions busy={busyId === paint.id} onEdit={() => onEditPaint(paint)} onDelete={() => onDeletePaint(paint)} />} />;
             })}
-            {!filteredPaints.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">Краски не найдены.</p>}
+            {!visiblePaintCatalog.length && <p className="rounded-lg border border-dashed border-[#303843] p-4 text-center text-[10px] text-slate-500">{view === 'primers' ? 'Грунты не найдены.' : 'Краски не найдены.'}</p>}
           </div>
-          {filteredPaints.length > visiblePaintsCount && <button type="button" onClick={() => setVisiblePaintsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visiblePaintsCount} из {filteredPaints.length}</button>}
+          {visiblePaintCatalog.length > visiblePaintsCount && <button type="button" onClick={() => setVisiblePaintsCount((count) => count + 40)} className="btn-secondary mt-2 w-full rounded-lg px-3 py-2 text-[10px] font-semibold">Показать ещё · {visiblePaintsCount} из {visiblePaintCatalog.length}</button>}
         </section>}
         {busyId && <p role="status" className="text-center text-[10px] text-slate-400">Синхронизируем изменения с приватным GitHub…</p>}
       </div>

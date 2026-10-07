@@ -1205,7 +1205,7 @@ function App() {
     setCatalogOpen(false);
   };
 
-  const openCatalogEntryForm = (type, entry = null) => {
+  const openCatalogEntryForm = (type, entry = null, initialCategory = 'interior') => {
     setEditingCatalogEntry(entry);
     if (type === 'color') {
       setCustomColorDraft(entry
@@ -1230,7 +1230,7 @@ function App() {
         surfaces: [...entry.surfaces],
         tintBases: [...metadata.tintBases],
         pricePerUnit: Number.isFinite(paintPricesByProduct[entry.id]) ? String(paintPricesByProduct[entry.id]) : '',
-      } : { brand: '', name: '', category: 'interior', applications: ['interior'], tintable: null, compatibleMaterials: [], recommendedProductIds: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
+      } : { brand: '', name: '', category: initialCategory, applications: initialCategory === 'primer' ? ['interior'] : ['interior'], tintable: null, compatibleMaterials: [], recommendedProductIds: [], coverage: '10', packages: '0.9, 2.7, 9', finish: 'Матовая', purpose: '', baseSystem: '', surfaces: initialCategory === 'primer' ? ['wall', 'plaster'] : ['wall', 'plaster'], tintBases: [], pricePerUnit: '' });
     }
     setCatalogManagerOpen(false);
     setCatalogManagerType(type === 'color' ? 'colors' : 'paints');
@@ -1927,6 +1927,7 @@ function App() {
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setHistoryOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><History size={15} /><span>История изменений</span></button>
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Paintbrush size={15} /><span>Управление цветами</span></button>
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('paints'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Droplets size={15} /><span>Управление красками</span></button>
+                <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('primers'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Layers3 size={15} /><span>Каталог грунтов</span></button>
               </div>
             </>}
           </div>}
@@ -2528,7 +2529,7 @@ function App() {
         busyId={catalogSavingId}
         onClose={() => setCatalogManagerOpen(false)}
         onAddColor={() => openCatalogEntryForm('color')}
-        onAddPaint={() => openCatalogEntryForm('paint')}
+        onAddPaint={() => openCatalogEntryForm('paint', null, catalogManagerType === 'primers' ? 'primer' : 'interior')}
         onEditColor={(color) => openCatalogEntryForm('color', color)}
         onDeleteColor={(color) => deleteCatalogEntry('color', color)}
         onEditPaint={(paint) => openCatalogEntryForm('paint', paint)}
