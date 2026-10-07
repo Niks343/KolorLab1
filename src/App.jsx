@@ -13,7 +13,7 @@ import baseColors from './data/colors.json';
 import farrowBallColors from './data/farrowBall.js';
 import { estimateLrvFromHex, getTintingBase } from './data/colorBase.js';
 import { apiBaseUrl, apiRequest, flushOfflineQueue } from './data/apiClient.js';
-import { readOfflineRequests } from './data/offlineQueue.js';
+import { discardQueuedClientCreation, readOfflineRequests } from './data/offlineQueue.js';
 import { deltaEFromLab, filterColors, getClosestColorMatches, getColorFamily, getColorRecommendations, rgbToLab } from './data/colorTools.js';
 import {
   createCustomCatalogDocument,
@@ -31,6 +31,8 @@ import CatalogManagementDialog from './components/CatalogManagementDialog.jsx';
 import ActivityHistoryDialog from './components/ActivityHistoryDialog.jsx';
 import PaintCatalogPanel from './components/PaintCatalogPanel.jsx';
 import { getPaintProductMetadata, paintApplications, paintCategories, paintFinishes, paintMaterials } from './data/paintCatalog.js';
+
+const toolsAccessPin = '011042';
 
 const colors = [
   ...baseColors.map((color) => {
@@ -531,6 +533,10 @@ function App() {
   const legacyCatalogSyncStartedRef = useRef(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolsUnlocked, setToolsUnlocked] = useState(false);
+  const [toolsPinDialogOpen, setToolsPinDialogOpen] = useState(false);
+  const [toolsPinInput, setToolsPinInput] = useState('');
+  const [toolsPinError, setToolsPinError] = useState('');
   const [activeMobileTab, setActiveMobileTab] = useState('Визуализация');
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState('');
@@ -1811,15 +1817,24 @@ function App() {
 
   const deleteClient = async () => {
     if (!openedClientCard) return;
-    if (!openedClientCard.hasPin) {
+    const isLocalPendingClient = openedClientCard.pendingSync && !openedClientCard.remote;
+    if (!openedClientCard.hasPin && !isLocalPendingClient) {
       setToast('Эту карточку нельзя удалить: она создана до введения PIN-кода.');
       return;
     }
-    if (!/^\d{6}$/.test(deletePinInput)) {
+    if (!isLocalPendingClient && !/^\d{6}$/.test(deletePinInput)) {
       setToast('Введите шестизначный PIN-код клиента.');
       return;
     }
     const removedProjectCount = openedClientProjects.length;
+    if (isLocalPendingClient) {
+      try {
+        await discardQueuedClientCreation(openedClientCard.id);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : 'Не удалось отменить отправку карточки из очереди.');
+        return;
+      }
+    }
     if (openedClientCard.remote) {
       try {
         await apiRequest(`/clients/${encodeURIComponent(openedClientCard.id)}`, {
@@ -1844,7 +1859,13 @@ function App() {
     setClientCardId('');
     setConfirmClientDeletion(false);
     setDeletePinInput('');
-    if (removedProjectCount) setToast(`Карточка клиента удалена вместе с проектами (${removedProjectCount}).`);
+    if (isLocalPendingClient) {
+      setToast('Локальная карточка удалена, её отправка отменена. Остальные операции оставлены в очереди.');
+    } else {
+      setToast(removedProjectCount
+        ? `Карточка клиента удалена вместе с проектами (${removedProjectCount}).`
+        : 'Карточка клиента удалена.');
+    }
   };
 
   const copyOrder = async () => {
@@ -1920,7 +1941,14 @@ function App() {
           </div>
           <button onClick={() => setActiveMobileTab('Краски')} className="btn-secondary hidden items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold xl:flex"><Droplets size={15} /><span>Краски</span></button>
           {apiBaseUrl && <div className="relative">
-            <button onClick={() => setToolsOpen((open) => !open)} aria-expanded={toolsOpen} aria-haspopup="menu" aria-label="Инструменты" className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><SlidersHorizontal size={15} /><span className="hidden sm:inline">Инструменты</span></button>
+            <button onClick={() => {
+              if (!toolsUnlocked) {
+                setToolsPinError('');
+                setToolsPinDialogOpen(true);
+                return;
+              }
+              setToolsOpen((open) => !open);
+            }} aria-expanded={toolsOpen || toolsPinDialogOpen} aria-haspopup={toolsUnlocked ? 'menu' : 'dialog'} aria-label="Инструменты" className="btn-secondary flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold sm:px-3"><SlidersHorizontal size={15} /><span className="hidden sm:inline">Инструменты</span></button>
             {toolsOpen && <>
               <button aria-label="Закрыть меню инструментов" onClick={() => setToolsOpen(false)} className="fixed inset-0 z-30 cursor-default" />
               <div role="menu" aria-label="Инструменты KolorLab" onKeyDown={(event) => { if (event.key === 'Escape') setToolsOpen(false); }} className="absolute right-0 top-full z-40 mt-2 w-52 rounded-xl border border-[#303844] bg-[#11161d] p-1.5 shadow-2xl shadow-black/50">
@@ -1928,6 +1956,7 @@ function App() {
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('colors'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Paintbrush size={15} /><span>Управление цветами</span></button>
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('paints'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Droplets size={15} /><span>Управление красками</span></button>
                 <button role="menuitem" onClick={() => { setToolsOpen(false); setCatalogManagerType('primers'); setCatalogManagerOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-slate-300 transition hover:bg-[#202731] hover:text-white"><Layers3 size={15} /><span>Каталог грунтов</span></button>
+                <button role="menuitem" onClick={() => { setToolsOpen(false); setToolsUnlocked(false); }} className="mt-1 flex w-full items-center gap-2.5 rounded-lg border-t border-[#252b33] px-3 py-2.5 pt-3 text-left text-xs font-medium text-slate-400 transition hover:bg-[#202731] hover:text-white"><ShieldCheck size={15} /><span>Заблокировать инструменты</span></button>
               </div>
             </>}
           </div>}
@@ -2535,6 +2564,44 @@ function App() {
         onEditPaint={(paint) => openCatalogEntryForm('paint', paint)}
         onDeletePaint={(paint) => deleteCatalogEntry('paint', paint)}
       />
+      {toolsPinDialogOpen && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          setToolsPinDialogOpen(false);
+          setToolsPinInput('');
+          setToolsPinError('');
+        }
+      }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="tools-pin-title" className="panel w-full max-w-sm rounded-2xl border border-[#303945] p-5 shadow-2xl">
+          <div className="mb-4 flex items-center gap-3">
+            <span className="accent-surface flex h-10 w-10 items-center justify-center rounded-xl text-[var(--primary-300)]"><ShieldCheck size={18} /></span>
+            <div><div className="eyebrow">ДОСТУП К НАСТРОЙКАМ</div><h2 id="tools-pin-title" className="mt-1 text-base font-bold">Введите PIN-код</h2></div>
+          </div>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            if (toolsPinInput !== toolsAccessPin) {
+              setToolsPinError('Неверный PIN-код. Попробуйте ещё раз.');
+              setToolsPinInput('');
+              return;
+            }
+            setToolsUnlocked(true);
+            setToolsOpen(true);
+            setToolsPinDialogOpen(false);
+            setToolsPinInput('');
+            setToolsPinError('');
+          }}>
+            <input autoFocus autoComplete="off" aria-label="PIN-код для входа в инструменты" aria-invalid={Boolean(toolsPinError)} type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={toolsPinInput} onChange={(event) => {
+              setToolsPinInput(event.target.value.replace(/\D/g, '').slice(0, 6));
+              setToolsPinError('');
+            }} placeholder="6 цифр" className="field w-full rounded-lg px-3 py-3 text-center font-mono text-lg tracking-[.45em]" />
+            {toolsPinError && <p role="alert" className="mt-2 text-center text-[10px] text-rose-300">{toolsPinError}</p>}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => { setToolsPinDialogOpen(false); setToolsPinInput(''); setToolsPinError(''); }} className="btn-secondary rounded-lg px-3 py-2.5 text-xs font-semibold">Отмена</button>
+              <button type="submit" disabled={toolsPinInput.length !== 6} className="btn-primary rounded-lg px-3 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-45">Войти</button>
+            </div>
+          </form>
+          <p className="mt-3 text-center text-[9px] leading-relaxed text-slate-600">PIN блокирует только доступ через интерфейс этого сайта.</p>
+        </section>
+      </div>}
       <ActivityHistoryDialog
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -2678,15 +2745,17 @@ function App() {
               <button disabled={!openedClientProjects.length} onClick={downloadOrder} className="btn-secondary flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"><FileDown size={13} />Скачать TXT</button>
               <button disabled={!openedClientProjects.length} onClick={() => window.print()} className="btn-secondary flex items-center justify-center gap-1.5 rounded-lg py-2.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Printer size={13} />Печать / PDF</button>
             </div>
-            {!openedClientCard.hasPin ? <p className="rounded-lg border border-[#2b323c] bg-[#0d1117] p-3 text-[10px] leading-relaxed text-slate-500">Эта карточка создана до введения PIN-кода. Для защиты клиента её удаление отключено.</p>
+            {!openedClientCard.hasPin && !(openedClientCard.pendingSync && !openedClientCard.remote) ? <p className="rounded-lg border border-[#2b323c] bg-[#0d1117] p-3 text-[10px] leading-relaxed text-slate-500">Эта карточка создана до введения PIN-кода. Для защиты клиента её удаление отключено.</p>
               : confirmClientDeletion ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3">
-              <p className="text-xs leading-relaxed text-slate-300">Удалить карточку клиента «{openedClientCard.name}» и все проекты? Телефон может остаться в истории GitHub. Это действие нельзя отменить.</p>
-              <input value={deletePinInput} onChange={(event) => setDeletePinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="current-password" placeholder="Введите PIN-код из 6 цифр" aria-label="PIN-код для удаления карточки" className="field mt-3 w-full rounded-lg px-3 py-2.5 text-xs" />
+              <p className="text-xs leading-relaxed text-slate-300">{openedClientCard.pendingSync && !openedClientCard.remote
+                ? `Удалить локальную карточку «${openedClientCard.name}» и отменить её отправку? Остальные записи очереди не изменятся.`
+                : `Удалить карточку клиента «${openedClientCard.name}» и все проекты? Телефон может остаться в истории GitHub. Это действие нельзя отменить.`}</p>
+              {!(openedClientCard.pendingSync && !openedClientCard.remote) && <input value={deletePinInput} onChange={(event) => setDeletePinInput(event.target.value.replace(/\D/g, '').slice(0, 6))} type="password" inputMode="numeric" autoComplete="current-password" placeholder="Введите PIN-код из 6 цифр" aria-label="PIN-код для удаления карточки" className="field mt-3 w-full rounded-lg px-3 py-2.5 text-xs" />}
               <div className="mt-3 flex gap-2">
-                <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">Удалить карточку</button>
+                <button onClick={deleteClient} className="flex-1 rounded-lg bg-rose-500/15 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/25">{openedClientCard.pendingSync && !openedClientCard.remote ? 'Удалить и отменить отправку' : 'Удалить карточку'}</button>
                 <button onClick={() => { setConfirmClientDeletion(false); setDeletePinInput(''); }} className="btn-secondary rounded-lg px-4 py-2.5 text-xs font-semibold">Отмена</button>
               </div>
-            </div> : <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />Удалить клиента</button>}
+            </div> : <button onClick={() => setConfirmClientDeletion(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-rose-500/20 px-3 py-2.5 text-xs font-semibold text-rose-300 transition hover:border-rose-500/40 hover:bg-rose-500/10"><Trash2 size={14} />{openedClientCard.pendingSync && !openedClientCard.remote ? 'Отменить отправку карточки' : 'Удалить клиента'}</button>}
           </div>
         </section>
       </div>}

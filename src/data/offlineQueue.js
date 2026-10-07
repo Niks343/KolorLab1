@@ -111,3 +111,30 @@ export async function removeOfflineRequest(id) {
     database.close();
   }
 }
+
+export function isQueuedClientCreation(item, clientId) {
+  return item?.request?.path === '/clients'
+    && item.request.method === 'PUT'
+    && item.request.metadata?.clientId === clientId;
+}
+
+export async function discardQueuedClientCreation(clientId) {
+  if (typeof clientId !== 'string' || !clientId) {
+    throw new Error('Не удалось определить карточку клиента для отмены отправки.');
+  }
+  const queued = await readOfflineRequests();
+  const matchingIds = queued.filter((item) => isQueuedClientCreation(item, clientId)).map((item) => item.id);
+  if (!matchingIds.length) return 0;
+
+  const database = await openDatabase();
+  try {
+    await transaction(database, queueStoreName, 'readwrite', (store) => {
+      for (const id of matchingIds) store.delete(id);
+      return null;
+    });
+  } finally {
+    database.close();
+  }
+  window.dispatchEvent(new Event('kolorlab-sync-queue-changed'));
+  return matchingIds.length;
+}
